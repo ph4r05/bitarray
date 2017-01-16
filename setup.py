@@ -13,9 +13,11 @@ kwds['version'] = eval(pat.search(data).group(1))
 
 
 setup(
-    name = "bitarray",
+    name = "bitarray_ph4",
     author = "Ilan Schnell",
     author_email = "ilanschnell@gmail.com",
+    maintainer = "Dusan Klinec (ph4r05)",
+    maintainer_email = "dusan.klinec@gmail.com",
     url = "https://github.com/ilanschnell/bitarray",
     license = "PSF",
     classifiers = [
