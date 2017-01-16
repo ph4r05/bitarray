@@ -97,7 +97,7 @@ static PyTypeObject Bitarraytype;
 #define GETBIT(self, i)  \
     ((self)->ob_item[(i) / BUF_TYPE_SIZE] & BITMASK((self)->endian, i) ? 1 : 0)
 
-static void
+static void inline
 setbit(bitarrayobject *self, idx_t i, int bit)
 {
     BUF_TYPE *cp, mask;
@@ -110,7 +110,7 @@ setbit(bitarrayobject *self, idx_t i, int bit)
         *cp &= ~mask;
 }
 
-static int
+static int inline
 check_overflow(idx_t nbits)
 {
     idx_t max_bits;
