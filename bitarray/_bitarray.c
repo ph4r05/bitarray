@@ -1704,6 +1704,64 @@ transfer of data between bitarray objects to other python objects\n\
 
 
 static PyObject *
+bitarray_eval_monic(bitarrayobject *self, PyObject *args, PyObject *kwds)
+{
+    static char* kwlist[] = {"data", "index", "blocksize", NULL};
+    PyObject *x;
+    idx_t index=0, blocksize=16;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|OLL:eval_monic", kwlist, &x, &index, &blocksize)) {
+        return NULL;
+    }
+
+    if (!bitarray_Check(x)) {
+        PyErr_SetString(PyExc_TypeError, "bitarray expected");
+        return NULL;
+    }
+
+    // BEGIN Evaluation core:
+    // Resize current bitarray so it can store the evaluation result.
+    bitarrayobject * other = (bitarrayobject *) x;
+    idx_t new_bit_size = other->nbits / blocksize;
+    if (new_bit_size != self->nbits && resize(self, new_bit_size) < 0)
+        return NULL;
+
+    setunused(self);
+
+    // Actual evaluation.
+    // Currently it is a naive implementation with simple accumulator, to avoid multiple GETBIT and setbit.
+    idx_t ctr = 0;
+    BUF_TYPE acc = 0;               // accumulator - here is the sub-result collected.
+    unsigned char sub_ctr = 0;      // counter inside the BUF_TYPE, small range
+    for(idx_t offset = index; offset < other->nbits; offset += blocksize){
+        if (GETBIT(other, offset)) {
+            acc |= BITMASK(self->endian, sub_ctr);
+        }
+
+        // Once accumulator is full, flush it. Or this is the last iteration.
+        ++sub_ctr;
+        if (sub_ctr >= BUF_TYPE_SIZE || offset + blocksize >= other->nbits){
+            self->ob_item[ctr] = acc;
+            sub_ctr = 0;
+            acc = 0;
+            ++ctr;
+        }
+    }
+
+    // END Evaluation core
+    Py_INCREF(self);
+    return (PyObject *) self;
+}
+
+PyDoc_STRVAR(eval_monic_doc,
+"eval_monic(data, index, blocksize)\n\
+\n\
+Evaluates a monic term on the input data with x_index and the given\n\
+blocksize. The evaluation is performed in-place with minimal reallocations \n\
+required. The result is bitarray of evaluations of the term.");
+
+
+static PyObject *
 bitarray_repr(bitarrayobject *self)
 {
     PyObject *string;
@@ -2494,6 +2552,9 @@ bitarray_methods[] = {
     {"unpack",       (PyCFunction) bitarray_unpack,      METH_VARARGS |
                                                          METH_KEYWORDS,
      unpack_doc},
+    {"eval_monic",   (PyCFunction) bitarray_eval_monic,  METH_VARARGS |
+                                                         METH_KEYWORDS,
+      eval_monic_doc},
 
     /* special methods */
     {"__copy__",     (PyCFunction) bitarray_copy,        METH_NOARGS,
