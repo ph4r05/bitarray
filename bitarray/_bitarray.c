@@ -1719,17 +1719,33 @@ bitarray_eval_monic(bitarrayobject *self, PyObject *args, PyObject *kwds)
         return NULL;
     }
 
+    if (index < 0){
+        PyErr_SetString(PyExc_IndexError, "index has to be zero or greater");
+        return NULL;
+    }
+
+    if (blocksize <= 0){
+        PyErr_SetString(PyExc_IndexError, "block size has to be 1 or greater");
+        return NULL;
+    }
+
+    if (index >= blocksize){
+        PyErr_SetString(PyExc_IndexError, "index has to be strictly less than block size");
+        return NULL;
+    }
+
     // BEGIN Evaluation core:
     // Resize current bitarray so it can store the evaluation result.
     bitarrayobject * other = (bitarrayobject *) x;
     idx_t new_bit_size = other->nbits / blocksize;
-    if (new_bit_size != self->nbits && resize(self, new_bit_size) < 0)
+    if (new_bit_size != self->nbits && resize(self, new_bit_size) < 0){
         return NULL;
+    }
 
     setunused(self);
 
-    // Actual evaluation.
-    // Currently it is a naive implementation with simple accumulator, to avoid multiple GETBIT and setbit.
+    // Actual term evaluation.
+    // Naively it is same as the following: take index-th bit, skip blocksize bits.
     idx_t ctr = 0;
     BUF_TYPE acc = 0;               // accumulator - here is the sub-result collected.
     unsigned char sub_ctr = 0;      // counter inside the BUF_TYPE, small range
@@ -1738,8 +1754,9 @@ bitarray_eval_monic(bitarrayobject *self, PyObject *args, PyObject *kwds)
             acc |= BITMASK(self->endian, sub_ctr);
         }
 
-        // Once accumulator is full, flush it. Or this is the last iteration.
         ++sub_ctr;
+        // Once accumulator is full (or this is the last iteration), flush it to
+        // the buffer.
         if (sub_ctr >= BUF_TYPE_SIZE || offset + blocksize >= other->nbits){
             self->ob_item[ctr] = acc;
             sub_ctr = 0;
@@ -1757,8 +1774,8 @@ PyDoc_STRVAR(eval_monic_doc,
 "eval_monic(data, index, blocksize)\n\
 \n\
 Evaluates a monic term on the input data with x_index and the given\n\
-blocksize. The evaluation is performed in-place with minimal reallocations \n\
-required. The result is bitarray of evaluations of the term.");
+blocksize. The evaluation is performed in-place with minimal memory reallocations. \n\
+The result is a bitarray of evaluations of the term.");
 
 
 static PyObject *
