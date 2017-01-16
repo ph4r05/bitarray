@@ -1577,6 +1577,21 @@ class MethodTests(unittest.TestCase, Util):
             self.assert_(a is b)
             self.check_obj(b)
 
+    def test_eval_monic(self):
+        input = '11100011' + '11001100'
+        a = bitarray(input)
+        b = bitarray()
+
+        self.assertEqual(b.eval_monic(a, 2, 16), bitarray('1'))
+        self.assertEqual(b.eval_monic(a, 9, 16), bitarray('1'))
+        self.assertEqual(b.eval_monic(a, 10, 16), bitarray('0'))
+
+        self.assertEqual(b.eval_monic(a, 0, 8), bitarray('11'))
+        self.assertEqual(b.eval_monic(a, 2, 8), bitarray('10'))
+
+        self.assertEqual(b.eval_monic(a*100, 0, 8), bitarray('11'*100))
+        self.assertEqual(b.eval_monic(a*100, 2, 8), bitarray('10'*100))
+        self.assertEqual(b.eval_monic(a*10, 0, 1), a*10)
 
 tests.append(MethodTests)
 
