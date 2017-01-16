@@ -67,12 +67,15 @@ typedef long long int idx_t;
 /* throughout:  0 = little endian   1 = big endian */
 #define DEFAULT_ENDIAN  1
 
+#define BUF_TYPE char
+#define BUF_TYPE_SIZE (sizeof(BUF_TYPE))
+
 typedef struct {
     PyObject_VAR_HEAD
 #ifdef WITH_BUFFER
     int ob_exports;             /* how many buffer exports */
 #endif
-    char *ob_item;
+    BUF_TYPE *ob_item;
     Py_ssize_t allocated;       /* how many bytes allocated */
     idx_t nbits;                /* length og bitarray */
     int endian;                 /* bit endianness of bitarray */
@@ -83,24 +86,24 @@ static PyTypeObject Bitarraytype;
 
 #define bitarray_Check(obj)  PyObject_TypeCheck(obj, &Bitarraytype)
 
-#define BITS(bytes)  (((idx_t) 8) * ((idx_t) (bytes)))
+#define BITS(bytes)  (((idx_t) BUF_TYPE_SIZE) * ((idx_t) (bytes)))
 
-#define BYTES(bits)  (((bits) == 0) ? 0 : (((bits) - 1) / 8 + 1))
+#define BYTES(bits)  (((bits) == 0) ? 0 : (((bits) - 1) / BUF_TYPE_SIZE + 1))
 
-#define BITMASK(endian, i)  (((char) 1) << ((endian) ? (7 - (i)%8) : (i)%8))
+#define BITMASK(endian, i)  (((BUF_TYPE) 1) << ((endian) ? (BUF_TYPE_SIZE-1 - (i)%BUF_TYPE_SIZE) : (i)%BUF_TYPE_SIZE))
 
 /* ------------ low level access to bits in bitarrayobject ------------- */
 
 #define GETBIT(self, i)  \
-    ((self)->ob_item[(i) / 8] & BITMASK((self)->endian, i) ? 1 : 0)
+    ((self)->ob_item[(i) / BUF_TYPE_SIZE] & BITMASK((self)->endian, i) ? 1 : 0)
 
 static void
 setbit(bitarrayobject *self, idx_t i, int bit)
 {
-    char *cp, mask;
+    BUF_TYPE *cp, mask;
 
     mask = BITMASK(self->endian, i);
-    cp = self->ob_item + i / 8;
+    cp = self->ob_item + i / BUF_TYPE_SIZE;
     if (bit)
         *cp |= mask;
     else
@@ -142,7 +145,7 @@ resize(bitarrayobject *self, idx_t nbits)
        current size, then proceed with the realloc() to shrink the list.
     */
     if (self->allocated >= newsize &&
-        Py_SIZE(self) < newsize + 16 &&
+        Py_SIZE(self) < newsize + BUF_TYPE_SIZE+BUF_TYPE_SIZE &&
         self->ob_item != NULL)
     {
         Py_SIZE(self) = newsize;
@@ -165,7 +168,7 @@ resize(bitarrayobject *self, idx_t nbits)
            by about 1/16th -- this is done because bitarrays are assumed
            to be memory critical.
         */
-        _new_size = (newsize >> 4) + (Py_SIZE(self) < 8 ? 3 : 7) + newsize;
+        _new_size = (newsize >> 4) + (Py_SIZE(self) < BUF_TYPE_SIZE ? BUF_TYPE_SIZE/2-1 : BUF_TYPE_SIZE-1) + newsize;
 
     self->ob_item = PyMem_Realloc(self->ob_item, _new_size);
     if (self->ob_item == NULL) {
@@ -303,7 +306,7 @@ setunused(bitarrayobject *self)
         setbit(self, i, 0);
         res++;
     }
-    assert(res < 8);
+    assert(res < BUF_TYPE_SIZE);
     return res;
 }
 
@@ -407,7 +410,7 @@ bytereverse(bitarrayobject *self)
         int j, k;
         for (k = 0; k < 256; k++) {
             trans[k] = 0x00;
-            for (j = 0; j < 8; j++)
+            for (j = 0; j < 8; j++) // TODO: fix
                 if (1 << (7 - j) & k)
                     trans[k] |= 1 << j;
         }
@@ -474,13 +477,13 @@ findfirst(bitarrayobject *self, int vi, idx_t start, idx_t stop)
     if (start >= stop)
         return -1;
 
-    if (stop > start + 8) {
+    if (stop > start + BUF_TYPE_SIZE) {
         /* seraching for 1 means: break when byte is not 0x00
            searching for 0 means: break when byte is not 0xff */
         c = vi ? 0x00 : 0xff;
 
         /* skip ahead by checking whole bytes */
-        for (j = (Py_ssize_t) (start / 8); j < BYTES(stop); j++)
+        for (j = (Py_ssize_t) (start / BUF_TYPE_SIZE); j < BYTES(stop); j++)
             if (c ^ self->ob_item[j])
                 break;
 
@@ -703,7 +706,7 @@ extend_rawstring(bitarrayobject *self, PyObject *string)
     Py_ssize_t strlen;
     char *str;
 
-    assert(PyString_Check(string) && self->nbits % 8 == 0);
+    assert(PyString_Check(string) && self->nbits % BUF_TYPE_SIZE == 0);
     strlen = PyString_Size(string);
     if (strlen == 0)
         return 0;
@@ -2595,7 +2598,7 @@ bitarray_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
             return newbitarrayobject(type, 0, endian);
 
         str = PyString_AsString(initial);
-        if (0 <= str[0] && str[0] < 8) {
+        if (0 <= str[0] && str[0] < BUF_TYPE_SIZE) {
             /* when the first character is smaller than 8, it indicates the
                number of unused bits at the end, and rest of the bytes
                consist of the raw binary data, this is used for pickling */
