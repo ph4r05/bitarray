@@ -68,7 +68,7 @@ typedef long long int idx_t;
 #define DEFAULT_ENDIAN  1
 
 #define BUF_TYPE char
-#define BUF_TYPE_SIZE (sizeof(BUF_TYPE))
+#define BUF_TYPE_SIZE (sizeof(BUF_TYPE)*8)
 
 typedef struct {
     PyObject_VAR_HEAD
