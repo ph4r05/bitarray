@@ -13,10 +13,12 @@ kwds['version'] = eval(pat.search(data).group(1))
 
 
 setup(
-    name = "bitarray",
+    name = "bitarray_ph4",
     author = "Ilan Schnell",
     author_email = "ilanschnell@gmail.com",
-    url = "https://github.com/ilanschnell/bitarray",
+    maintainer = "Dusan Klinec (ph4r05)",
+    maintainer_email = "dusan.klinec@gmail.com",
+    url = "https://github.com/ph4r05/bitarray",
     license = "PSF",
     classifiers = [
         "License :: OSI Approved :: Python Software Foundation License",
@@ -35,6 +37,7 @@ setup(
         "Programming Language :: Python :: 3.3",
         "Programming Language :: Python :: 3.4",
         "Programming Language :: Python :: 3.5",
+        "Programming Language :: Python :: 3.6",
         "Topic :: Utilities",
     ],
     description = "efficient arrays of booleans -- C extension",

@@ -2,6 +2,8 @@
 bitarray: efficient arrays of booleans
 ======================================
 
+|Build Status|
+
 This module provides an object type which efficiently represents an array
 of booleans.  Bitarrays are sequence types and behave very much like usual
 lists.  Eight bits are represented by one byte in a contiguous block of
@@ -17,36 +19,62 @@ this module useful.
 Key features
 ------------
 
- * All functionality implemented in C.
+* All functionality implemented in C.
 
- * Bitarray objects behave very much like a list object, in particular
-   slicing (including slice assignment and deletion) is supported.
+* Bitarray objects behave very much like a list object, in particular
+  slicing (including slice assignment and deletion) is supported.
 
- * The bit endianness can be specified for each bitarray object, see below.
+* The bit endianness can be specified for each bitarray object, see below.
 
- * On 32bit systems, a bitarray object can contain up to 2^34 elements,
-   that is 16 Gbits (on 64bit machines up to 2^63 elements in theory --
-   on Python 2.4 only 2^31 elements,
-   see `PEP 353 <http://www.python.org/dev/peps/pep-0353/>`_
-   (added in Python 2.5)).
+* On 32bit systems, a bitarray object can contain up to 2^34 elements,
+  that is 16 Gbits (on 64bit machines up to 2^63 elements in theory --
+  on Python 2.4 only 2^31 elements,
+  see `PEP 353 <http://www.python.org/dev/peps/pep-0353/>`_
+  (added in Python 2.5)).
 
- * Packing and unpacking to other binary data formats,
-   e.g. `numpy.ndarray <http://www.scipy.org/Tentative_NumPy_Tutorial>`_,
-   is possible.
+* Packing and unpacking to other binary data formats,
+  e.g. `numpy.ndarray <http://www.scipy.org/Tentative_NumPy_Tutorial>`_,
+  is possible.
 
- * Fast methods for encoding and decoding variable bit length prefix codes
+* Fast methods for encoding and decoding variable bit length prefix codes
 
- * Sequential search (as list or iterator)
+* Sequential search (as list or iterator)
 
- * Bitwise operations: ``&, |, ^, &=, |=, ^=, ~``
+* Bitwise operations: ``&, |, ^, &=, |=, ^=, ~``
 
- * Pickling and unpickling of bitarray objects possible.
+* Pickling and unpickling of bitarray objects possible.
 
- * Bitarray objects support the buffer protocol (Python 2.7 only)
+* Bitarray objects support the buffer protocol (Python 2.7 only)
 
+
+Improvements in this fork
+-------------------------
+
+* Fast copy function - used in many places internally. If have same endianness and aligned offsets, ``memmove`` is used.
+
+* Pull request for fast bitwise operations using SIMD instructions merged - 16 bytes in one instruction.
+
+* Bitcount function optimised ``count()``. Hamming weight is computed using WP3 algorithm on 64bit words.
+
+* New method: ``ba.fast_copy(other)``. If the dest bitarray has same bitlength the fast copy is used - ``memmove``.
+
+* New method: ``ba.eval_monic(data, index, blocksize)``. Evaluates a monic term on the input data with x_index and the given
+  blocksize. Equivalent to ``data[index::blocksize]``. The evaluation is performed in-place with minimal memory reallocations.
+  The result is a bitarray of evaluations of the term.
+
+* New method: ``ba.fast_hw_and(other)``. Performs ``return count(ba & other)`` in memory without reallocations
+
+* New method: ``ba.fast_hw_or(other)``. Performs ``return count(ba | other)`` in memory without reallocations
+
+* New method: ``ba.fast_hw_xor(other)``. Performs ``return count(ba ^ other)`` in memory without reallocations
 
 Installation
 ------------
+
+Installation from pip::
+
+    $ pip install bitarray_ph4
+
 
 bitarray can be installed from source::
 
@@ -74,7 +102,15 @@ Once you have installed the package, you may want to test it::
 You can always import the function test,
 and ``test().wasSuccessful()`` will return True when the test went well.
 
+Rebuild
+-------
 
+To rebuild the extension just use the make
+
+::
+
+    $ make
+    $ make test
 
 Using the module
 ----------------
@@ -564,3 +600,7 @@ Change log
 
 Please find the complete change log
 `here <https://github.com/ilanschnell/bitarray/blob/master/CHANGE_LOG>`_.
+
+.. |Build Status| image:: https://travis-ci.org/ph4r05/bitarray.svg?branch=master
+   :target: https://travis-ci.org/ph4r05/bitarray
+

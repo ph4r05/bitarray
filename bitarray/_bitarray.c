@@ -4,6 +4,23 @@
 
    Author: Ilan Schnell
 */
+#if (defined(__GNUC__) || defined(__clang__))
+#define HAS_VECTORS 1
+#else
+#define HAS_VECTORS 0
+#endif
+
+#if HAS_VECTORS
+typedef char vec __attribute__((vector_size(16)));
+#endif
+
+#if (defined(__GNUC__) || defined(__clang__))
+#define ATTR_UNUSED __attribute__((__unused__))
+#else
+#define ATTR_UNUSED
+#endif
+
+#define UNUSEDVAR(x) (void)x
 
 #define PY_SSIZE_T_CLEAN
 #include "Python.h"
@@ -61,18 +78,24 @@ int PyIndex_Check(PyObject *o)
 #endif /* HAVE_SYS_TYPES_H */
 #endif /* !STDC_HEADERS */
 
+#ifdef ALLOW_B16_LOOKUP
+#include <stdalign.h>
+#endif
 
 typedef long long int idx_t;
 
 /* throughout:  0 = little endian   1 = big endian */
 #define DEFAULT_ENDIAN  1
 
+#define BUF_TYPE char
+#define BUF_TYPE_SIZE (sizeof(BUF_TYPE)*8)
+
 typedef struct {
     PyObject_VAR_HEAD
 #ifdef WITH_BUFFER
     int ob_exports;             /* how many buffer exports */
 #endif
-    char *ob_item;
+    BUF_TYPE *ob_item;
     Py_ssize_t allocated;       /* how many bytes allocated */
     idx_t nbits;                /* length og bitarray */
     int endian;                 /* bit endianness of bitarray */
@@ -83,31 +106,91 @@ static PyTypeObject Bitarraytype;
 
 #define bitarray_Check(obj)  PyObject_TypeCheck(obj, &Bitarraytype)
 
-#define BITS(bytes)  (((idx_t) 8) * ((idx_t) (bytes)))
+#define BITS(bytes)  (((idx_t) BUF_TYPE_SIZE) * ((idx_t) (bytes)))
 
-#define BYTES(bits)  (((bits) == 0) ? 0 : (((bits) - 1) / 8 + 1))
+#define BYTES(bits)  (((bits) == 0) ? 0 : (((bits) - 1) / BUF_TYPE_SIZE + 1))
 
-#define BITMASK(endian, i)  (((char) 1) << ((endian) ? (7 - (i)%8) : (i)%8))
+//#define BITMASK(endian, i)  (((BUF_TYPE) 1) << ((endian) ? (BUF_TYPE_SIZE-1 - (i)%BUF_TYPE_SIZE) : (i)%BUF_TYPE_SIZE))
+#define BITMASK(endian, i)  (((unsigned char) 1) << ((endian) ? (7 - (i)%8) : (i)%8))
+
+/* -------------------------------------------- term generator -------------------------------------------- */
+#define MAX_DEG 64
+typedef struct {
+    int deg;
+    int maxterm;
+    int cur[MAX_DEG];
+} termgen_t;
 
 /* ------------ low level access to bits in bitarrayobject ------------- */
 
 #define GETBIT(self, i)  \
-    ((self)->ob_item[(i) / 8] & BITMASK((self)->endian, i) ? 1 : 0)
+    ((self)->ob_item[(i) / BUF_TYPE_SIZE] & BITMASK((self)->endian, (i)) ? 1 : 0)
+
+#if HAS_VECTORS
+/*
+ * Perform bitwise operation OP on 16 bytes of memory at a time.
+ */
+#define vector_op(A, B, OP) do {  \
+    vec __a, __b, __r;            \
+    memcpy(&__a, A, sizeof(vec)); \
+    memcpy(&__b, B, sizeof(vec)); \
+    __r = __a OP __b;             \
+    memcpy(A, &__r, sizeof(vec)); \
+} while(0);
+#endif
+
+/**
+ * Initializes term generator to a first combination
+ */
+static void init_termgen(termgen_t * t, int deg, int maxterm){
+    int i;
+    t->deg = deg;
+    t->maxterm = maxterm;
+    memset(t->cur, 0, sizeof(int)*MAX_DEG);
+    for(i=0; i<deg; i++){
+        t->cur[i] = i;
+    }
+}
+
+/**
+ * Moves termgen to a next combination
+ */
+static int next_termgen(termgen_t * t){
+    int j;
+    int idx = t->deg - 1;
+
+    if (t->cur[idx] == t->maxterm - 1) {
+        do {
+            idx -= 1;
+        } while (idx >= 0 && t->cur[idx] + 1 == t->cur[idx + 1]);
+
+        if (idx < 0) {
+            return 0;
+        }
+
+        for (j = idx + 1; j < t->deg; ++j) {
+            t->cur[j] = t->cur[idx] + j - idx + 1;
+        }
+    }
+
+    t->cur[idx]++;
+    return 1;
+}
 
 static void
 setbit(bitarrayobject *self, idx_t i, int bit)
 {
-    char *cp, mask;
+    BUF_TYPE *cp, mask;
 
     mask = BITMASK(self->endian, i);
-    cp = self->ob_item + i / 8;
+    cp = self->ob_item + i / BUF_TYPE_SIZE;
     if (bit)
         *cp |= mask;
     else
         *cp &= ~mask;
 }
 
-static int
+static int inline
 check_overflow(idx_t nbits)
 {
     idx_t max_bits;
@@ -142,7 +225,7 @@ resize(bitarrayobject *self, idx_t nbits)
        current size, then proceed with the realloc() to shrink the list.
     */
     if (self->allocated >= newsize &&
-        Py_SIZE(self) < newsize + 16 &&
+        Py_SIZE(self) < newsize + BUF_TYPE_SIZE+BUF_TYPE_SIZE &&
         self->ob_item != NULL)
     {
         Py_SIZE(self) = newsize;
@@ -165,7 +248,7 @@ resize(bitarrayobject *self, idx_t nbits)
            by about 1/16th -- this is done because bitarrays are assumed
            to be memory critical.
         */
-        _new_size = (newsize >> 4) + (Py_SIZE(self) < 8 ? 3 : 7) + newsize;
+        _new_size = (newsize >> 4) + (Py_SIZE(self) < BUF_TYPE_SIZE ? BUF_TYPE_SIZE/2-1 : BUF_TYPE_SIZE-1) + newsize;
 
     self->ob_item = PyMem_Realloc(self->ob_item, _new_size);
     if (self->ob_item == NULL) {
@@ -234,25 +317,34 @@ copy_n(bitarrayobject *self, idx_t a,
     assert(0 <= n && n <= self->nbits && n <= other->nbits);
     assert(0 <= a && a <= self->nbits - n);
     assert(0 <= b && b <= other->nbits - n);
-
-    /* XXX
-    if (self->endian == other->endian && a % 8 == 0 && b % 8 == 0 && n >= 8)
-    {
-        Py_ssize_t bytes;
-        idx_t bits;
-
-        bytes = n / 8;
-        bits = 8 * bytes;
-        copy_n(self, bits + a, other, bits + b, n - bits);
-        memmove(self->ob_item + a / 8, other->ob_item + b / 8, bytes);
+    if (n == 0){
         return;
     }
-    */
+
+    if (self->endian == other->endian && a % 8 == 0 && b % 8 == 0 && n >= 8)
+    {
+        const Py_ssize_t bytes = (Py_ssize_t) n / 8;
+        const idx_t bits = bytes * 8;
+
+        if (a <= b){
+            memmove(self->ob_item + a / 8, other->ob_item + b / 8, bytes);
+        }
+
+        if (n != bits) {
+            copy_n(self, bits + a, other, bits + b, n - bits);
+        }
+
+        if (a > b){
+            memmove(self->ob_item + a / 8, other->ob_item + b / 8, bytes);
+        }
+
+        return;
+    }
 
     /* the different type of looping is only relevant when other and self
        are the same object, i.e. when copying a piece of an bitarrayobject
        onto itself */
-    if (a < b) {
+    if (a <= b) {
         for (i = 0; i < n; i++)             /* loop forward (delete) */
             setbit(self, i + a, GETBIT(other, i + b));
     }
@@ -303,7 +395,7 @@ setunused(bitarrayobject *self)
         setbit(self, i, 0);
         res++;
     }
-    assert(res < 8);
+    assert(res < BUF_TYPE_SIZE);
     return res;
 }
 
@@ -323,50 +415,6 @@ repeat(bitarrayobject *self, idx_t n)
             return -1;
         for (i = 1; i < n; i++)
             copy_n(self, i * nbits, self, 0, nbits);
-    }
-    return 0;
-}
-
-
-enum op_type {
-    OP_and,
-    OP_or,
-    OP_xor,
-};
-
-/* perform bitwise operation */
-static int
-bitwise(bitarrayobject *self, PyObject *arg, enum op_type oper)
-{
-    bitarrayobject *other;
-    Py_ssize_t i;
-
-    if (!bitarray_Check(arg)) {
-        PyErr_SetString(PyExc_TypeError,
-                        "bitarray object expected for bitwise operation");
-        return -1;
-    }
-    other = (bitarrayobject *) arg;
-    if (self->nbits != other->nbits) {
-        PyErr_SetString(PyExc_ValueError,
-               "bitarrays of equal length expected for bitwise operation");
-        return -1;
-    }
-    setunused(self);
-    setunused(other);
-    switch (oper) {
-    case OP_and:
-        for (i = 0; i < Py_SIZE(self); i++)
-            self->ob_item[i] &= other->ob_item[i];
-        break;
-    case OP_or:
-        for (i = 0; i < Py_SIZE(self); i++)
-            self->ob_item[i] |= other->ob_item[i];
-        break;
-    case OP_xor:
-        for (i = 0; i < Py_SIZE(self); i++)
-            self->ob_item[i] ^= other->ob_item[i];
-        break;
     }
     return 0;
 }
@@ -407,7 +455,7 @@ bytereverse(bitarrayobject *self)
         int j, k;
         for (k = 0; k < 256; k++) {
             trans[k] = 0x00;
-            for (j = 0; j < 8; j++)
+            for (j = 0; j < 8; j++) // TODO: fix
                 if (1 << (7 - j) & k)
                     trans[k] |= 1 << j;
         }
@@ -441,18 +489,83 @@ static int bitcount_lookup[256] = {
     4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8,
 };
 
+#ifdef ALLOW_B16_LOOKUP
+#define a(n) n+0, n+1, n+1, n+2          // 2 bits
+#define b(n) a(n+0),a(n+1),a(n+1),a(n+2) // 4 bits
+#define c(n) b(n+0),b(n+1),b(n+1),b(n+2) // 6 bits
+#define d(n) c(n+0),c(n+1),c(n+1),c(n+2) // 8 bits
+#define e(n) d(n+0),d(n+1),d(n+1),d(n+2) //10 bits
+#define f(n) e(n+0),e(n+1),e(n+1),e(n+2) //12 bits
+#define g(n) f(n+0),f(n+1),f(n+1),f(n+2) //14 bits
+#define h(n) g(n+0),g(n+1),g(n+1),g(n+2) //16 bits
+
+//static const alignas(64) unsigned char bitcount_lookup16[0x10000]  = { h(0) };
+
+#undef h
+#undef g
+#undef f
+#undef e
+#undef d
+#undef c
+#undef b
+#undef a
+#endif
+
+//types and constants used in the functions below
+//uint64_t is an unsigned 64-bit integer variable type (defined in C99 version of C language)
+static const uint64_t bit_m1  = 0x5555555555555555; //binary: 0101...
+static const uint64_t bit_m2  = 0x3333333333333333; //binary: 00110011..
+static const uint64_t bit_m4  = 0x0f0f0f0f0f0f0f0f; //binary:  4 zeros,  4 ones ...
+//static const uint64_t bit_m8  = 0x00ff00ff00ff00ff; //binary:  8 zeros,  8 ones ...
+//static const uint64_t bit_m16 = 0x0000ffff0000ffff; //binary: 16 zeros, 16 ones ...
+//static const uint64_t bit_m32 = 0x00000000ffffffff; //binary: 32 zeros, 32 ones
+//static const uint64_t bit_hff = 0xffffffffffffffff; //binary: all ones
+static const uint64_t bit_h01 = 0x0101010101010101; //the sum of 256 to the power of 0,1,2,3...
+
+//This uses fewer arithmetic operations than any other known
+//implementation on machines with fast multiplication.
+//This algorithm uses 12 arithmetic operations, one of which is a multiply.
+// http://bisqwit.iki.fi/source/misc/bitcounting/#Wp3NiftyRevised
+// https://en.wikipedia.org/wiki/Hamming_weight
+static int
+popcount64c(uint64_t x)
+{
+    x -= (x >> 1) & bit_m1;             //put count of each 2 bits into those 2 bits
+    x = (x & bit_m2) + ((x >> 2) & bit_m2); //put count of each 4 bits into those 4 bits
+    x = (x + (x >> 4)) & bit_m4;        //put count of each 8 bits into those 8 bits
+    return (x * bit_h01) >> 56;  //returns left 8 bits of x + (x<<8) + (x<<16) + (x<<24) + ...
+}
+
+#define BITWISE_HW_WP3(tmpx, hw) do {                    \
+ tmpx -= (tmpx >> 1) & bit_m1;                       \
+ tmpx = (tmpx & bit_m2) + ((tmpx >> 2) & bit_m2);    \
+ tmpx = (tmpx + (tmpx >> 4)) & bit_m4;               \
+ hw += (tmpx * bit_h01) >> 56;                       \
+ } while(0)
+
 /* returns number of 1 bits */
 static idx_t
 count(bitarrayobject *self)
 {
-    Py_ssize_t i;
+    const Py_ssize_t size = Py_SIZE(self);
+    //const uint16_t * data = (const uint16_t *) self->ob_item;
+    const uint64_t * data = (const uint64_t *) self->ob_item;
+    uint64_t tmp = 0;
+
+    Py_ssize_t i = 0, ii = 0;
     idx_t res = 0;
-    unsigned char c;
 
     setunused(self);
-    for (i = 0; i < Py_SIZE(self); i++) {
-        c = self->ob_item[i];
-        res += bitcount_lookup[c];
+
+    // Faster 16 lookup
+    for (; i + 8 < size; i+=8, ++ii) {
+        tmp = data[ii];
+        BITWISE_HW_WP3(tmp, res);
+    }
+
+    // The rest
+    for (; i < size; ++i) {
+        res += bitcount_lookup[(unsigned char)self->ob_item[i]];
     }
     return res;
 }
@@ -474,13 +587,13 @@ findfirst(bitarrayobject *self, int vi, idx_t start, idx_t stop)
     if (start >= stop)
         return -1;
 
-    if (stop > start + 8) {
+    if (stop > start + BUF_TYPE_SIZE) {
         /* seraching for 1 means: break when byte is not 0x00
            searching for 0 means: break when byte is not 0xff */
         c = vi ? 0x00 : 0xff;
 
         /* skip ahead by checking whole bytes */
-        for (j = (Py_ssize_t) (start / 8); j < BYTES(stop); j++)
+        for (j = (Py_ssize_t) (start / BUF_TYPE_SIZE); j < BYTES(stop); j++)
             if (c ^ self->ob_item[j])
                 break;
 
@@ -543,7 +656,7 @@ append_item(bitarrayobject *self, PyObject *item)
 }
 
 static PyObject *
-unpack(bitarrayobject *self, char zero, char one)
+unpack(bitarrayobject *self, unsigned char zero, unsigned char one)
 {
     PyObject *res;
     Py_ssize_t i;
@@ -703,7 +816,7 @@ extend_rawstring(bitarrayobject *self, PyObject *string)
     Py_ssize_t strlen;
     char *str;
 
-    assert(PyString_Check(string) && self->nbits % 8 == 0);
+    assert(PyString_Check(string) && self->nbits % BUF_TYPE_SIZE == 0);
     strlen = PyString_Size(string);
     if (strlen == 0)
         return 0;
@@ -1658,7 +1771,7 @@ use the extend method.");
 static PyObject *
 bitarray_unpack(bitarrayobject *self, PyObject *args, PyObject *kwds)
 {
-    char zero = 0x00, one = 0xff;
+    unsigned char zero = 0x00, one = 0xff;
     static char* kwlist[] = {"zero", "one", NULL};
 
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|cc:unpack", kwlist,
@@ -1699,6 +1812,199 @@ This method, as well as the unpack method, are meant for efficient\n\
 transfer of data between bitarray objects to other python objects\n\
 (for example NumPy's ndarray object) which have a different view of memory.");
 
+/* -------------------------------------------- term functions -------------------------------------------- */
+
+static PyObject *
+bitarray_eval_monic(bitarrayobject *self, PyObject *args, PyObject *kwds)
+{
+    static char* kwlist[] = {"data", "index", "blocksize", NULL};
+    PyObject *x;
+    idx_t index=0, blocksize=16, offset=0;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|OLL:eval_monic", kwlist, &x, &index, &blocksize)) {
+        return NULL;
+    }
+
+    if (!bitarray_Check(x)) {
+        PyErr_SetString(PyExc_TypeError, "bitarray expected");
+        return NULL;
+    }
+
+    if (index < 0){
+        PyErr_SetString(PyExc_IndexError, "index has to be zero or greater");
+        return NULL;
+    }
+
+    if (blocksize <= 0){
+        PyErr_SetString(PyExc_IndexError, "block size has to be 1 or greater");
+        return NULL;
+    }
+
+    if (index >= blocksize){
+        PyErr_SetString(PyExc_IndexError, "index has to be strictly less than block size");
+        return NULL;
+    }
+
+    // BEGIN Evaluation core:
+    // Resize current bitarray so it can store the evaluation result.
+    bitarrayobject * other = (bitarrayobject *) x;
+    idx_t new_bit_size = other->nbits / blocksize;
+    if (new_bit_size != self->nbits && resize(self, new_bit_size) < 0){
+        return NULL;
+    }
+
+    setunused(self);
+
+    // Actual term evaluation.
+    // Naively it is same as the following: take index-th bit, skip blocksize bits.
+    idx_t ctr = 0;
+    BUF_TYPE acc = 0;               // accumulator - here is the sub-result collected.
+    unsigned char sub_ctr = 0;      // counter inside the BUF_TYPE, small range
+    for(offset = index; offset < other->nbits; offset += blocksize){
+        if (GETBIT(other, offset)) {
+            acc |= BITMASK(self->endian, sub_ctr);
+        }
+
+        ++sub_ctr;
+        // Once accumulator is full (or this is the last iteration), flush it to
+        // the buffer.
+        if (sub_ctr >= BUF_TYPE_SIZE || offset + blocksize >= other->nbits){
+            self->ob_item[ctr] = acc;
+            sub_ctr = 0;
+            acc = 0;
+            ++ctr;
+        }
+    }
+
+    // END Evaluation core
+    Py_INCREF(self);
+    return (PyObject *) self;
+}
+
+PyDoc_STRVAR(eval_monic_doc,
+"eval_monic(data, index, blocksize)\n\
+\n\
+Evaluates a monic term on the input data with x_index and the given\n\
+blocksize. Equivalent to data[index::blocksize]. The evaluation is performed in-place with minimal \n\
+memory reallocations. The result is a bitarray of evaluations of the term.");
+
+static PyObject *
+bitarray_fast_copy(bitarrayobject *self, PyObject *obj)
+{
+    if (!bitarray_Check(obj)) {
+        PyErr_SetString(PyExc_TypeError, "bitarray expected");
+        return NULL;
+    }
+
+    bitarrayobject * other = (bitarrayobject *) obj;
+    if (other->endian != self->endian){
+        PyErr_SetString(PyExc_ValueError, "The source does not have the same endianity as the destination");
+        return NULL;
+    }
+
+    if (other->nbits != self->nbits){
+        PyErr_SetString(PyExc_ValueError, "The source does not have the same size as the destination");
+        return NULL;
+    }
+
+    if (other == self || other->ob_item == self->ob_item){
+        PyErr_SetString(PyExc_ValueError, "The source and the destination are the same");
+        return NULL;
+    }
+
+    // Copy itself, very fast.
+    setunused(self);
+    setunused(other);
+    copy_n(self, 0, other, 0, other->nbits);
+
+    Py_INCREF(self);
+    return (PyObject *) self;
+}
+
+PyDoc_STRVAR(fast_copy_doc,
+"fast_copy(other_bitarray)\n\
+\n\
+Copies the contents of the parameter with memcpy. Has to have same endianness, size, ...");
+
+#define BITWISE_HW_TYPE uint64_t
+#define BITWISE_HW_SUB_SHIFT8(x)  hw += bitcount_lookup[  (unsigned char)((( tmp ) >> ((x)*8))  & 0xff)]
+#define BITWISE_HW_SUB_SHIFT16(x) hw += bitcount_lookup16[(uint16_t)     ((( tmp ) >> ((x)*16)) & 0xffff)]
+#define BITWISE_HW_LP16(tmp) do {                    \
+    BITWISE_HW_SUB_SHIFT16(0);                       \
+    BITWISE_HW_SUB_SHIFT16(1);                       \
+    BITWISE_HW_SUB_SHIFT16(2);                       \
+    BITWISE_HW_SUB_SHIFT16(3);                       \
+} while(0)
+
+#define BITWISE_HW_INTERNAL(SELF, OTHER, OP) do {                                                                      \
+    Py_ssize_t i = 0, ii = 0;                                                                                          \
+    const Py_ssize_t size = Py_SIZE(SELF);                                                                             \
+    const BITWISE_HW_TYPE * self_ob_item = (const BITWISE_HW_TYPE *) (SELF)->ob_item;                                  \
+    const BITWISE_HW_TYPE * other_ob_item = (const BITWISE_HW_TYPE *) (OTHER)->ob_item;                                \
+    BITWISE_HW_TYPE tmp;                                                                                               \
+                                                                                                                       \
+    for (ii=0; i + sizeof(BITWISE_HW_TYPE) < size; i += sizeof(BITWISE_HW_TYPE), ++ii) {                               \
+        tmp = self_ob_item[ii] OP other_ob_item[ii];                                                                   \
+        BITWISE_HW_WP3(tmp, hw);                                                                                       \
+    }                                                                                                                  \
+                                                                                                                       \
+    for (; i < size; ++i) {                                                                                            \
+        hw += bitcount_lookup[(unsigned char)((SELF)->ob_item[i] OP (OTHER)->ob_item[i])];                             \
+    }                                                                                                                  \
+} while(0)
+
+#define BITWISE_FAST_HW_FUNC(OPNAME, OP)                                                                               \
+static PyObject * bitwise_fast_hw_ ## OPNAME (bitarrayobject *self, PyObject *obj)                                     \
+{                                                                                                                      \
+    if (!bitarray_Check(obj)) {                                                                                        \
+        PyErr_SetString(PyExc_TypeError, "bitarray expected");                                                         \
+        return NULL;                                                                                                   \
+    }                                                                                                                  \
+                                                                                                                       \
+    bitarrayobject * other = (bitarrayobject *) obj;                                                                   \
+    if (other->endian != self->endian){                                                                                \
+        PyErr_SetString(PyExc_ValueError, "The source does not have the same endianity as the destination");           \
+        return NULL;                                                                                                   \
+    }                                                                                                                  \
+                                                                                                                       \
+    if (other->nbits != self->nbits){                                                                                  \
+        PyErr_SetString(PyExc_ValueError, "The source does not have the same size as the destination");                \
+        return NULL;                                                                                                   \
+    }                                                                                                                  \
+                                                                                                                       \
+    if (other == self || other->ob_item == self->ob_item){                                                             \
+        PyErr_SetString(PyExc_ValueError, "The source and the destination are the same");                              \
+        return NULL;                                                                                                   \
+    }                                                                                                                  \
+                                                                                                                       \
+    idx_t hw = 0;                                                                                                      \
+    setunused(self);                                                                                                   \
+    setunused(other);                                                                                                  \
+                                                                                                                       \
+    BITWISE_HW_INTERNAL(self, other, OP);                                                                              \
+    return PyLong_FromLongLong(hw);                                                                                    \
+}
+
+BITWISE_FAST_HW_FUNC(and, &);
+BITWISE_FAST_HW_FUNC(xor, ^);
+BITWISE_FAST_HW_FUNC(or, |);
+
+PyDoc_STRVAR(bitwise_fast_hw_and_doc,
+             "fast_hw_and(other_bitarray)\n\
+\n\
+Performs quick in-memory AND operation on these self and other_bitarray and returns a hamming weight.");
+
+PyDoc_STRVAR(bitwise_fast_hw_or_doc,
+             "fast_hw_or(other_bitarray)\n\
+\n\
+Performs quick in-memory OR operation on these self and other_bitarray and returns a hamming weight.");
+
+PyDoc_STRVAR(bitwise_fast_hw_xor_doc,
+             "fast_hw_xor(other_bitarray)\n\
+\n\
+Performs quick in-memory XOR operation on these self and other_bitarray and returns a hamming weight.");
+
+/* -------------------------------------------- bitarray repr -------------------------------------------- */
 
 static PyObject *
 bitarray_repr(bitarrayobject *self)
@@ -2068,38 +2374,429 @@ bitarray_cpinvert(bitarrayobject *self)
     return res;
 }
 
-#define BITWISE_FUNC(oper)  \
+#if HAS_VECTORS
+#define BITWISE_FUNC_INTERNAL(SELF, OTHER, OP, OPEQ) do {   \
+    Py_ssize_t i = 0;                                       \
+    const Py_ssize_t size = Py_SIZE(SELF);                  \
+    char* self_ob_item = (SELF)->ob_item;                   \
+    const char* other_ob_item = (OTHER)->ob_item;           \
+                                                            \
+    for (; i + sizeof(vec) < size; i += sizeof(vec)) {      \
+        vector_op(self_ob_item + i, other_ob_item + i, OP); \
+    }                                                       \
+                                                            \
+    for (; i < size; ++i) {                                 \
+        self_ob_item[i] OPEQ other_ob_item[i];              \
+    }                                                       \
+} while(0);
+#else
+#define BITWISE_FUNC_INTERNAL(SELF, OTHER, OP, OPEQ) do { \
+    Py_ssize_t i;                                         \
+    const Py_ssize_t size = Py_SIZE(SELF);                \
+                                                          \
+    for (i = 0; i < size; ++i) {                          \
+        (SELF)->ob_item[i] OPEQ (OTHER)->ob_item[i];      \
+    }                                                     \
+} while(0);
+#endif
+
+/*
+ * Generate function that performs bitwise operations.
+ **/
+#define BITWISE_FUNC(OPNAME, OP, OPEQ)                                 \
+static int bitwise_ ## OPNAME (bitarrayobject *self, PyObject *arg)    \
+{                                                                      \
+    bitarrayobject *other;                                             \
+                                                                       \
+    if (!bitarray_Check(arg)) {                                        \
+        PyErr_SetString(PyExc_TypeError,                               \
+          "bitarray object expected for bitwise operation");           \
+        return -1;                                                     \
+    }                                                                  \
+                                                                       \
+    other = (bitarrayobject *) arg;                                    \
+                                                                       \
+    if (self->nbits != other->nbits) {                                 \
+        PyErr_SetString(PyExc_ValueError,                              \
+          "bitarrays of equal length expected for bitwise operation"); \
+        return -1;                                                     \
+    }                                                                  \
+                                                                       \
+    setunused(self);                                                   \
+    setunused(other);                                                  \
+                                                                       \
+    BITWISE_FUNC_INTERNAL(self, other, OP, OPEQ);                      \
+                                                                       \
+    return 0;                                                          \
+}
+
+BITWISE_FUNC(xor, ^, ^=)
+BITWISE_FUNC(and, &, &=)
+BITWISE_FUNC(or, |, |=)
+
+#define BITARRAY_FUNC(oper)  \
 static PyObject *                                                   \
 bitarray_ ## oper (bitarrayobject *self, PyObject *other)           \
 {                                                                   \
     PyObject *res;                                                  \
                                                                     \
     res = bitarray_copy(self);                                      \
-    if (bitwise((bitarrayobject *) res, other, OP_ ## oper) < 0) {  \
+                                                                    \
+    if (bitwise_ ## oper((bitarrayobject *) res, other) < 0) {      \
         Py_DECREF(res);                                             \
         return NULL;                                                \
     }                                                               \
+                                                                    \
     return res;                                                     \
 }
 
-BITWISE_FUNC(and)
-BITWISE_FUNC(or)
-BITWISE_FUNC(xor)
+BITARRAY_FUNC(and)
+BITARRAY_FUNC(or)
+BITARRAY_FUNC(xor)
 
 
-#define BITWISE_IFUNC(oper)  \
+#define BITARRAY_IFUNC(oper)  \
 static PyObject *                                            \
 bitarray_i ## oper (bitarrayobject *self, PyObject *other)   \
 {                                                            \
-    if (bitwise(self, other, OP_ ## oper) < 0)               \
+    if (bitwise_ ## oper(self, other) < 0)                   \
         return NULL;                                         \
+                                                             \
     Py_INCREF(self);                                         \
     return (PyObject *) self;                                \
 }
 
-BITWISE_IFUNC(and)
-BITWISE_IFUNC(or)
-BITWISE_IFUNC(xor)
+BITARRAY_IFUNC(and)
+BITARRAY_IFUNC(or)
+BITARRAY_IFUNC(xor)
+
+/* -------------------------------------------- best terms -------------------------------------------- */
+
+// Heap element
+typedef struct {
+    int64_t hwdiff;
+    int64_t hw;
+    uint64_t idx;
+} topterm_heap_elem_t;
+
+static int topterm_compare(const void *e1, const void *e2, const void *udata ATTR_UNUSED)
+{
+    UNUSEDVAR(udata);
+    const topterm_heap_elem_t *i1 = e1;
+    const topterm_heap_elem_t *i2 = e2;
+    if (i2->hwdiff == i1->hwdiff){
+        return 0;
+    }
+    return i1->hwdiff < i2->hwdiff ? 1 : -1;
+}
+
+// heap implementation: https://github.com/ph4r05/heap
+typedef struct heap_s{
+    unsigned int size;  /* size of array */
+    unsigned int count; /* items within heap */
+    const void *udata;  /* user data */
+    int (*cmp) (const void *, const void *, const void *);
+    void * array[];
+} heap_t;
+
+size_t heap_sizeof(unsigned int size)
+{
+    return sizeof(heap_t) + size * sizeof(void *);
+}
+
+#define HP_CHILD_LEFT(idx) ((idx) * 2 + 1)
+#define HP_CHILD_RIGHT(idx) ((idx) * 2 + 2)
+#define HP_PARENT(idx) (((idx) - 1) / 2)
+
+void heap_init(heap_t* h, int (*cmp) (const void *,const void *, const void *udata), const void *udata, unsigned int size)
+{
+    h->cmp = cmp;
+    h->udata = udata;
+    h->size = size;
+    h->count = 0;
+}
+
+heap_t *heap_new(int (*cmp) (const void *, const void *, const void *udata), const void *udata, unsigned int size)
+{
+    heap_t *h = PyMem_Malloc(heap_sizeof(size));
+
+    if (!h)
+        return NULL;
+
+    heap_init(h, cmp, udata, size);
+
+    return h;
+}
+
+void heap_free(heap_t * h)
+{
+    PyMem_Free(h);
+}
+
+int heap_count(const heap_t * h)
+{
+    return h->count;
+}
+
+/**
+ * @return a new heap on success; NULL otherwise */
+static heap_t* __ensurecapacity(heap_t * h)
+{
+    if (h->count < h->size)
+        return h;
+
+    h->size *= 2;
+
+    return PyMem_Realloc(h, heap_sizeof(h->size));
+}
+
+static void __swap(heap_t * h, const int i1, const int i2)
+{
+    void *tmp = h->array[i1];
+    h->array[i1] = h->array[i2];
+    h->array[i2] = tmp;
+}
+
+static int __pushup(heap_t * h, unsigned int idx)
+{
+    /* 0 is the root node */
+    while (0 != idx)
+    {
+        int parent = HP_PARENT(idx);
+
+        /* we are smaller than the parent */
+        if (h->cmp(h->array[idx], h->array[parent], h->udata) < 0)
+            return -1;
+        else
+            __swap(h, idx, parent);
+
+        idx = parent;
+    }
+
+    return idx;
+}
+
+static void __pushdown(heap_t * h, unsigned int idx)
+{
+    while (1)
+    {
+        unsigned int childl, childr, child;
+
+        childl = HP_CHILD_LEFT(idx);
+        childr = HP_CHILD_RIGHT(idx);
+
+        if (childr >= h->count)
+        {
+            /* can't pushdown any further */
+            if (childl >= h->count)
+                return;
+
+            child = childl;
+        }
+            /* find biggest child */
+        else if (h->cmp(h->array[childl], h->array[childr], h->udata) < 0)
+            child = childr;
+        else
+            child = childl;
+
+        /* idx is smaller than child */
+        if (h->cmp(h->array[idx], h->array[child], h->udata) < 0)
+        {
+            __swap(h, idx, child);
+            idx = child;
+            /* bigger than the biggest child, we stop, we win */
+        }
+        else
+            return;
+    }
+}
+
+static void __heap_offerx(heap_t * h, void *item)
+{
+    h->array[h->count] = item;
+    __pushup(h, h->count++);
+}
+
+int heap_offerx(heap_t * h, void *item)
+{
+    if (h->count == h->size)
+        return -1;
+    __heap_offerx(h, item);
+    return 0;
+}
+
+int heap_offer(heap_t ** h, void *item)
+{
+    if (NULL == (*h = __ensurecapacity(*h)))
+        return -1;
+
+    __heap_offerx(*h, item);
+    return 0;
+}
+
+#define OP_AND 1
+#define OP_XOR 2
+
+// eval_top_k. We need a simple heap - heap allocated top 128 elements
+static PyObject *
+eval_all_terms(PyObject *self, PyObject *args, PyObject *kwds)
+{
+    static char* kwlist[] = {"base", "deg", "topk", "hw_center", NULL};
+    PyObject *base_arr;
+    idx_t deg=2, maxterm=0, topk=128, hw_center=0;
+    long k = 0;
+    int op_code = OP_AND;
+    topterm_heap_elem_t * heap_data = NULL;
+
+    //PySys_WriteStdout("Here! %p ");
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|LLL:eval_all_terms", kwlist, &base_arr, &deg, &topk, &hw_center)) {
+        return NULL;
+    }
+
+    if (!PyList_Check(base_arr)) {
+        PyErr_SetString(PyExc_TypeError, "base is expected as a list of bit arrays");
+        return NULL;
+    }
+
+    maxterm = PyList_Size(base_arr);
+    if (deg > maxterm){
+        PyErr_SetString(PyExc_IndexError, "degree is larger than size of the base");
+        return NULL;
+    }
+    if (deg < 2){
+        PyErr_SetString(PyExc_IndexError, "Minimal degree is 2. For 1 use directly hw()");
+        return NULL;
+    }
+
+    // Base checking. Allocate memory for the base of maxterms.
+    bitarrayobject ** base = PyMem_Malloc((size_t) (sizeof(PyObject *) * maxterm));
+    if (base == NULL) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    for (k = 0; k < maxterm; k++) {
+        PyObject * tmp_obj = PyList_GetItem(base_arr, (Py_ssize_t) k);
+        if (!bitarray_Check(tmp_obj)) {
+            PyErr_SetString(PyExc_TypeError, "bitarray expected in the base array");
+            goto error;
+        }
+
+        base[k] = (bitarrayobject *) tmp_obj;
+    }
+
+    // Allocate memory for the heap objects, actual storage of the heap structs. Heap contains only pointers.
+    heap_data = PyMem_Malloc((size_t) (sizeof(topterm_heap_elem_t) * topk));
+    if (heap_data == NULL){
+        PyErr_NoMemory();
+        goto error;
+    }
+
+    // Prepare state & working variables
+    //const Py_ssize_t size = Py_SIZE(base[0]);
+    idx_t hw = 0, comb_idx=-1;
+
+    // Sub result for deg-1
+    int last_cached_tmpsub = -1;
+    bitarrayobject *tmpsub = (bitarrayobject *) newbitarrayobject(Py_TYPE(base[0]), base[0]->nbits, base[0]->endian);
+    if (tmpsub == NULL) {
+        goto error;
+    }
+
+    // Create the heap
+    heap_t *hp = heap_new(topterm_compare, NULL, (unsigned int) topk);
+
+    // Generate all polynomials
+    termgen_t termgen;
+    init_termgen(&termgen, (int)deg, (int)maxterm);
+    do {
+        hw = 0;
+        comb_idx += 1;
+        const int idx_first = termgen.cur[0];
+        const int idx_plast = termgen.cur[deg-2];
+        const int idx_last = termgen.cur[deg-1];
+
+        // Precompute tmpsub up to deg-2.
+        // Copy the first basis vector. Then AND or XOR next basis vector from the term.
+        if (last_cached_tmpsub != idx_plast){
+            memcpy(tmpsub->ob_item, base[idx_first]->ob_item, Py_SIZE(base[idx_first]));
+            for(k=1; k <= deg-2; k++){
+                if (op_code == OP_AND) {
+                    BITWISE_FUNC_INTERNAL(tmpsub, base[termgen.cur[k]], &, &=);
+                } else if (op_code == OP_XOR){
+                    BITWISE_FUNC_INTERNAL(tmpsub, base[termgen.cur[k]], ^, ^=);
+                }
+            }
+
+            last_cached_tmpsub = idx_plast;
+        }
+
+        // Now do just in-memory HW counting.
+        if (op_code == OP_AND) {
+            BITWISE_HW_INTERNAL(tmpsub, base[idx_last], &);
+        } else if (op_code == OP_XOR){
+            BITWISE_HW_INTERNAL(tmpsub, base[idx_last], ^);
+        }
+
+        int64_t hw_diff = hw_center > hw ? (hw_center - hw) : (hw - hw_center);
+
+        // Not interesting element (too low & heap is full already) -> continue.
+        if (comb_idx >= hp->size && hw_diff <= ((topterm_heap_elem_t * )(hp->array[0]))->hwdiff){
+            continue;
+        }
+
+        // Interesting element.
+        if (comb_idx < hp->size){
+            heap_data[comb_idx].hwdiff = hw_diff;
+            heap_data[comb_idx].hw = hw;
+            heap_data[comb_idx].idx = (uint64_t)comb_idx;
+            heap_offerx(hp, &(heap_data[comb_idx]));
+
+        } else {
+            topterm_heap_elem_t * const being_replaced = (topterm_heap_elem_t *) hp->array[0];
+            being_replaced->hwdiff = hw_diff;
+            being_replaced->hw = hw;
+            being_replaced->idx = (uint64_t)comb_idx;
+            __pushdown(hp, 0);
+        }
+
+    } while(next_termgen(&termgen) == 1);
+
+    // Return as an array of tuples. Sorting will be done in the python already.
+    PyObject* ret_list = PyList_New((Py_ssize_t)hp->count);
+    for(k=0; k < hp->count; k++){
+        topterm_heap_elem_t * const cur = (topterm_heap_elem_t *) hp->array[k];
+        PyObject* cur_tuple = PyTuple_Pack(3,
+                                           PyLong_FromLongLong(cur->hwdiff),
+                                           PyLong_FromLongLong(cur->hw),
+                                           PyLong_FromLongLong(cur->idx));
+        PyList_SetItem(ret_list, (Py_ssize_t)k, cur_tuple);
+    }
+
+    heap_free(hp);
+    if (base != NULL) {
+        PyMem_Free((void *) base);
+    }
+    if (heap_data != NULL){
+        PyMem_Free((void *) heap_data);
+    }
+
+    return ret_list;
+
+    error:
+    if (base != NULL) {
+        PyMem_Free((void *) base);
+    }
+    if (heap_data != NULL){
+        PyMem_Free((void *) heap_data);
+    }
+    return NULL;
+}
+
+PyDoc_STRVAR(eval_all_terms_doc,
+             "eval_all_terms(base, deg=2, topk=128, hw_center=0) -> list of (hwdiff, hw, idx)\n\
+\n\
+Evaluates all terms on the given basis");
 
 /******************* variable length encoding and decoding ***************/
 
@@ -2491,6 +3188,17 @@ bitarray_methods[] = {
     {"unpack",       (PyCFunction) bitarray_unpack,      METH_VARARGS |
                                                          METH_KEYWORDS,
      unpack_doc},
+    {"eval_monic",   (PyCFunction) bitarray_eval_monic,  METH_VARARGS |
+                                                         METH_KEYWORDS,
+      eval_monic_doc},
+    {"fast_copy",   (PyCFunction) bitarray_fast_copy,    METH_O,
+     fast_copy_doc},
+    {"fast_hw_and",   (PyCFunction) bitwise_fast_hw_and, METH_O,
+      bitwise_fast_hw_and_doc},
+    {"fast_hw_or",   (PyCFunction) bitwise_fast_hw_or,   METH_O,
+      bitwise_fast_hw_or_doc},
+    {"fast_hw_xor",   (PyCFunction) bitwise_fast_hw_xor, METH_O,
+      bitwise_fast_hw_xor_doc},
 
     /* special methods */
     {"__copy__",     (PyCFunction) bitarray_copy,        METH_NOARGS,
@@ -2595,7 +3303,7 @@ bitarray_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
             return newbitarrayobject(type, 0, endian);
 
         str = PyString_AsString(initial);
-        if (0 <= str[0] && str[0] < 8) {
+        if (0 <= str[0] && str[0] < BUF_TYPE_SIZE) {
             /* when the first character is smaller than 8, it indicates the
                number of unused bits at the end, and rest of the bytes
                consist of the raw binary data, this is used for pickling */
@@ -3015,6 +3723,7 @@ static PyMethodDef module_functions[] = {
     {"bitdiff",    (PyCFunction) bitdiff,    METH_VARARGS, bitdiff_doc   },
     {"bits2bytes", (PyCFunction) bits2bytes, METH_O,       bits2bytes_doc},
     {"_sysinfo",   (PyCFunction) sysinfo,    METH_NOARGS,  sysinfo_doc   },
+    {"eval_all_terms", (PyCFunction) eval_all_terms, METH_VARARGS | METH_KEYWORDS, eval_all_terms_doc },
     {NULL,         NULL}  /* sentinel */
 };
 

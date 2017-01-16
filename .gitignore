@@ -6,3 +6,5 @@
 README.html
 build/
 dist/
+.idea
+cmake-build-debug/
