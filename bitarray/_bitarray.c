@@ -1786,6 +1786,42 @@ Evaluates a monic term on the input data with x_index and the given\n\
 blocksize. The evaluation is performed in-place with minimal memory reallocations. \n\
 The result is a bitarray of evaluations of the term.");
 
+static PyObject *
+bitarray_fast_copy(bitarrayobject *self, PyObject *obj)
+{
+    if (!bitarray_Check(obj)) {
+        PyErr_SetString(PyExc_TypeError, "bitarray expected");
+        return NULL;
+    }
+
+    bitarrayobject * other = (bitarrayobject *) obj;
+    if (other->endian != self->endian){
+        PyErr_SetString(PyExc_ValueError, "The source does not have the same endianity as the destination");
+        return NULL;
+    }
+
+    if (other->nbits != self->nbits){
+        PyErr_SetString(PyExc_ValueError, "The source does not have the same size as the destination");
+        return NULL;
+    }
+
+    if (other == self || other->ob_item == self->ob_item){
+        PyErr_SetString(PyExc_ValueError, "The source and the destination are the same");
+        return NULL;
+    }
+
+    // Copy itself, very fast.
+    copy_n(self, 0, other, 0, other->nbits);
+
+    Py_INCREF(self);
+    return (PyObject *) self;
+}
+
+PyDoc_STRVAR(fast_copy_doc,
+"fast_copy(other_bitarray)\n\
+\n\
+Copies the contents of the parameter with memcpy. Has to have same endianness, size, ...");
+
 
 static PyObject *
 bitarray_repr(bitarrayobject *self)
@@ -2581,6 +2617,8 @@ bitarray_methods[] = {
     {"eval_monic",   (PyCFunction) bitarray_eval_monic,  METH_VARARGS |
                                                          METH_KEYWORDS,
       eval_monic_doc},
+    {"fast_copy",   (PyCFunction) bitarray_fast_copy,    METH_O,
+     fast_copy_doc},
 
     /* special methods */
     {"__copy__",     (PyCFunction) bitarray_copy,        METH_NOARGS,
