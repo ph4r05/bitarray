@@ -241,23 +241,23 @@ copy_n(bitarrayobject *self, idx_t a,
         return;
     }
 
-    /* Copy optimisation */
-    if (self->endian == other->endian && (a % 8) == 0 && (b % 8) == 0 && n >= 8)
+    if (self->endian == other->endian && a % 8 == 0 && b % 8 == 0 && n >= 8)
     {
-        const Py_ssize_t aligned_bytes = (Py_ssize_t) (n / 8);
-        const idx_t aligned_bits = aligned_bytes * 8;
+        const Py_ssize_t bytes = (Py_ssize_t) n / 8;
+        const idx_t bits = bytes * 8;
 
-        if (a<=b){
-            memmove((void*)self->ob_item + a / 8, (void*)other->ob_item + b / 8, (size_t)aligned_bytes);
+        if (a <= b){
+            memmove(self->ob_item + a / 8, other->ob_item + b / 8, bytes);
         }
 
-        if (n != aligned_bits) {
-            copy_n(self, aligned_bits + a, other, aligned_bits + b, n - aligned_bits);
+        if (n != bits) {
+            copy_n(self, bits + a, other, bits + b, n - bits);
         }
 
-        if (a>b){
-            memmove((void*)self->ob_item + a / 8, (void*)other->ob_item + b / 8, (size_t)aligned_bytes);
+        if (a > b){
+            memmove(self->ob_item + a / 8, other->ob_item + b / 8, bytes);
         }
+
         return;
     }
 
