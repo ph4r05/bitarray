@@ -95,7 +95,7 @@ static PyTypeObject Bitarraytype;
 /* ------------ low level access to bits in bitarrayobject ------------- */
 
 #define GETBIT(self, i)  \
-    ((self)->ob_item[(i) / BUF_TYPE_SIZE] & BITMASK((self)->endian, i) ? 1 : 0)
+    ((self)->ob_item[(i) / BUF_TYPE_SIZE] & BITMASK((self)->endian, (i)) ? 1 : 0)
 
 static void inline
 setbit(bitarrayobject *self, idx_t i, int bit)
