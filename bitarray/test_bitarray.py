@@ -451,7 +451,7 @@ class SliceTests(unittest.TestCase, Util):
             aa = a.tolist()
             la = len(a)
             if la == 0: continue
-            for dum in range(10):
+            for dum in range(30):
                 step = self.rndsliceidx(la)
                 if step == 0: step = None
                 s = slice(self.rndsliceidx(la),
@@ -515,7 +515,7 @@ class SliceTests(unittest.TestCase, Util):
         for a in self.randombitarrays():
             la = len(a)
             if la == 0: continue
-            for dum in range(3):
+            for dum in range(30):
                 step = self.rndsliceidx(la)
                 if step == 0: step = None
                 s = slice(self.rndsliceidx(la),
@@ -574,7 +574,7 @@ class SliceTests(unittest.TestCase, Util):
         for a in self.randombitarrays():
             la = len(a)
             if la == 0: continue
-            for dum in range(10):
+            for dum in range(30):
                 step = self.rndsliceidx(la)
                 if step == 0: step = None
                 s = slice(self.rndsliceidx(la),

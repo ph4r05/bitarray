@@ -237,25 +237,34 @@ copy_n(bitarrayobject *self, idx_t a,
     assert(0 <= n && n <= self->nbits && n <= other->nbits);
     assert(0 <= a && a <= self->nbits - n);
     assert(0 <= b && b <= other->nbits - n);
-
-    /* XXX
-    if (self->endian == other->endian && a % 8 == 0 && b % 8 == 0 && n >= 8)
-    {
-        Py_ssize_t bytes;
-        idx_t bits;
-
-        bytes = n / 8;
-        bits = 8 * bytes;
-        copy_n(self, bits + a, other, bits + b, n - bits);
-        memmove(self->ob_item + a / 8, other->ob_item + b / 8, bytes);
+    if (n == 0){
         return;
     }
-    */
+
+    /* Copy optimisation */
+    if (self->endian == other->endian && (a % 8) == 0 && (b % 8) == 0 && n >= 8)
+    {
+        const Py_ssize_t aligned_bytes = (Py_ssize_t) (n / 8);
+        const idx_t aligned_bits = aligned_bytes * 8;
+
+        if (a<=b){
+            memmove((void*)self->ob_item + a / 8, (void*)other->ob_item + b / 8, (size_t)aligned_bytes);
+        }
+
+        if (n != aligned_bits) {
+            copy_n(self, aligned_bits + a, other, aligned_bits + b, n - aligned_bits);
+        }
+
+        if (a>b){
+            memmove((void*)self->ob_item + a / 8, (void*)other->ob_item + b / 8, (size_t)aligned_bytes);
+        }
+        return;
+    }
 
     /* the different type of looping is only relevant when other and self
        are the same object, i.e. when copying a piece of an bitarrayobject
        onto itself */
-    if (a < b) {
+    if (a <= b) {
         for (i = 0; i < n; i++)             /* loop forward (delete) */
             setbit(self, i + a, GETBIT(other, i + b));
     }
