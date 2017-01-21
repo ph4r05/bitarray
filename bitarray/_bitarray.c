@@ -1800,7 +1800,7 @@ PyDoc_STRVAR(fast_copy_doc,
 Copies the contents of the parameter with memcpy. Has to have same endianness, size, ...");
 
 #define BITWISE_HW_TYPE unsigned long long
-#define BITWISE_HW_SUB_SHIFT(x) hw += bitcount_lookup[(( tmp ) >> ((x)*8)) & 0xff]
+#define BITWISE_HW_SUB_SHIFT(x) hw += bitcount_lookup[(unsigned char)((( tmp ) >> ((x)*8)) & 0xff)]
 #define BITWISE_HW_INTERNAL(SELF, OTHER, OP) do {     \
     Py_ssize_t i = 0, ii = 0;                                       \
     const Py_ssize_t size = Py_SIZE(SELF);                  \
@@ -1821,7 +1821,7 @@ Copies the contents of the parameter with memcpy. Has to have same endianness, s
     }                                                       \
                                                             \
     for (; i < size; ++i) {                                 \
-        hw += bitcount_lookup[(SELF)->ob_item[i] OP (OTHER)->ob_item[i]];   \
+        hw += bitcount_lookup[(unsigned char)((SELF)->ob_item[i] OP (OTHER)->ob_item[i])];   \
     }                                                                 \
 } while(0)
 
