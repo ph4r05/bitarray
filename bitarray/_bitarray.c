@@ -1786,6 +1786,8 @@ bitarray_fast_copy(bitarrayobject *self, PyObject *obj)
     }
 
     // Copy itself, very fast.
+    setunused(self);
+    setunused(other);
     copy_n(self, 0, other, 0, other->nbits);
 
     Py_INCREF(self);
@@ -1797,6 +1799,82 @@ PyDoc_STRVAR(fast_copy_doc,
 \n\
 Copies the contents of the parameter with memcpy. Has to have same endianness, size, ...");
 
+#define BITWISE_HW_TYPE unsigned long long
+#define BITWISE_HW_SUB_SHIFT(x) hw += bitcount_lookup[(( tmp ) >> ((x)*8)) & 0xff]
+#define BITWISE_HW_INTERNAL(SELF, OTHER, OP) do {     \
+    Py_ssize_t i = 0, ii = 0;                                       \
+    const Py_ssize_t size = Py_SIZE(SELF);                  \
+    const BITWISE_HW_TYPE * self_ob_item = (const BITWISE_HW_TYPE *) (SELF)->ob_item;                   \
+    const BITWISE_HW_TYPE * other_ob_item = (const BITWISE_HW_TYPE *) (OTHER)->ob_item;           \
+    BITWISE_HW_TYPE tmp;                                        \
+                                                     \
+    for (ii=0; i + sizeof(BITWISE_HW_TYPE) < size; i += sizeof(BITWISE_HW_TYPE), ++ii) {      \
+        tmp = self_ob_item[ii] OP other_ob_item[ii];  \
+        BITWISE_HW_SUB_SHIFT(0);  \
+        BITWISE_HW_SUB_SHIFT(1);  \
+        BITWISE_HW_SUB_SHIFT(2);  \
+        BITWISE_HW_SUB_SHIFT(3);  \
+        BITWISE_HW_SUB_SHIFT(4);  \
+        BITWISE_HW_SUB_SHIFT(5);  \
+        BITWISE_HW_SUB_SHIFT(6);  \
+        BITWISE_HW_SUB_SHIFT(7);  \
+    }                                                       \
+                                                            \
+    for (; i < size; ++i) {                                 \
+        hw += bitcount_lookup[(SELF)->ob_item[i] OP (OTHER)->ob_item[i]];   \
+    }                                                                 \
+} while(0)
+
+#define BITWISE_FAST_HW_FUNC(OPNAME, OP)                                                                               \
+static PyObject * bitwise_fast_hw_ ## OPNAME (bitarrayobject *self, PyObject *obj)                                     \
+{                                                                                                                      \
+    if (!bitarray_Check(obj)) {                                                                                        \
+        PyErr_SetString(PyExc_TypeError, "bitarray expected");                                                         \
+        return NULL;                                                                                                   \
+    }                                                                                                                  \
+                                                                                                                       \
+    bitarrayobject * other = (bitarrayobject *) obj;                                                                   \
+    if (other->endian != self->endian){                                                                                \
+        PyErr_SetString(PyExc_ValueError, "The source does not have the same endianity as the destination");           \
+        return NULL;                                                                                                   \
+    }                                                                                                                  \
+                                                                                                                       \
+    if (other->nbits != self->nbits){                                                                                  \
+        PyErr_SetString(PyExc_ValueError, "The source does not have the same size as the destination");                \
+        return NULL;                                                                                                   \
+    }                                                                                                                  \
+                                                                                                                       \
+    if (other == self || other->ob_item == self->ob_item){                                                             \
+        PyErr_SetString(PyExc_ValueError, "The source and the destination are the same");                              \
+        return NULL;                                                                                                   \
+    }                                                                                                                  \
+                                                                                                                       \
+    idx_t hw = 0;                                                                                                      \
+    setunused(self);                                                                                                   \
+    setunused(other);                                                                                                  \
+                                                                                                                       \
+    BITWISE_HW_INTERNAL(self, other, OP);                                                                              \
+    return PyLong_FromLongLong(hw);                                                                                    \
+}
+
+BITWISE_FAST_HW_FUNC(and, &);
+BITWISE_FAST_HW_FUNC(xor, ^);
+BITWISE_FAST_HW_FUNC(or, |);
+
+PyDoc_STRVAR(bitwise_fast_hw_and_doc,
+             "fast_hw_and(other_bitarray)\n\
+\n\
+Performs quick in-memory AND operation on these self and other_bitarray and returns a hamming weight.");
+
+PyDoc_STRVAR(bitwise_fast_hw_or_doc,
+             "fast_hw_or(other_bitarray)\n\
+\n\
+Performs quick in-memory OR operation on these self and other_bitarray and returns a hamming weight.");
+
+PyDoc_STRVAR(bitwise_fast_hw_xor_doc,
+             "fast_hw_xor(other_bitarray)\n\
+\n\
+Performs quick in-memory XOR operation on these self and other_bitarray and returns a hamming weight.");
 
 static PyObject *
 bitarray_repr(bitarrayobject *self)
@@ -2657,6 +2735,12 @@ bitarray_methods[] = {
       eval_monic_doc},
     {"fast_copy",   (PyCFunction) bitarray_fast_copy,    METH_O,
      fast_copy_doc},
+    {"fast_hw_and",   (PyCFunction) bitwise_fast_hw_and, METH_O,
+      bitwise_fast_hw_and_doc},
+    {"fast_hw_or",   (PyCFunction) bitwise_fast_hw_or,   METH_O,
+      bitwise_fast_hw_or_doc},
+    {"fast_hw_xor",   (PyCFunction) bitwise_fast_hw_xor, METH_O,
+      bitwise_fast_hw_xor_doc},
 
     /* special methods */
     {"__copy__",     (PyCFunction) bitarray_copy,        METH_NOARGS,
