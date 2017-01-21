@@ -1801,28 +1801,28 @@ Copies the contents of the parameter with memcpy. Has to have same endianness, s
 
 #define BITWISE_HW_TYPE unsigned long long
 #define BITWISE_HW_SUB_SHIFT(x) hw += bitcount_lookup[(unsigned char)((( tmp ) >> ((x)*8)) & 0xff)]
-#define BITWISE_HW_INTERNAL(SELF, OTHER, OP) do {     \
-    Py_ssize_t i = 0, ii = 0;                                       \
-    const Py_ssize_t size = Py_SIZE(SELF);                  \
-    const BITWISE_HW_TYPE * self_ob_item = (const BITWISE_HW_TYPE *) (SELF)->ob_item;                   \
-    const BITWISE_HW_TYPE * other_ob_item = (const BITWISE_HW_TYPE *) (OTHER)->ob_item;           \
-    BITWISE_HW_TYPE tmp;                                        \
-                                                     \
-    for (ii=0; i + sizeof(BITWISE_HW_TYPE) < size; i += sizeof(BITWISE_HW_TYPE), ++ii) {      \
-        tmp = self_ob_item[ii] OP other_ob_item[ii];  \
-        BITWISE_HW_SUB_SHIFT(0);  \
-        BITWISE_HW_SUB_SHIFT(1);  \
-        BITWISE_HW_SUB_SHIFT(2);  \
-        BITWISE_HW_SUB_SHIFT(3);  \
-        BITWISE_HW_SUB_SHIFT(4);  \
-        BITWISE_HW_SUB_SHIFT(5);  \
-        BITWISE_HW_SUB_SHIFT(6);  \
-        BITWISE_HW_SUB_SHIFT(7);  \
-    }                                                       \
-                                                            \
-    for (; i < size; ++i) {                                 \
-        hw += bitcount_lookup[(unsigned char)((SELF)->ob_item[i] OP (OTHER)->ob_item[i])];   \
-    }                                                                 \
+#define BITWISE_HW_INTERNAL(SELF, OTHER, OP) do {                                                                      \
+    Py_ssize_t i = 0, ii = 0;                                                                                          \
+    const Py_ssize_t size = Py_SIZE(SELF);                                                                             \
+    const BITWISE_HW_TYPE * self_ob_item = (const BITWISE_HW_TYPE *) (SELF)->ob_item;                                  \
+    const BITWISE_HW_TYPE * other_ob_item = (const BITWISE_HW_TYPE *) (OTHER)->ob_item;                                \
+    BITWISE_HW_TYPE tmp;                                                                                               \
+                                                                                                                       \
+    for (ii=0; i + sizeof(BITWISE_HW_TYPE) < size; i += sizeof(BITWISE_HW_TYPE), ++ii) {                               \
+        tmp = self_ob_item[ii] OP other_ob_item[ii];                                                                   \
+        BITWISE_HW_SUB_SHIFT(0);                                                                                       \
+        BITWISE_HW_SUB_SHIFT(1);                                                                                       \
+        BITWISE_HW_SUB_SHIFT(2);                                                                                       \
+        BITWISE_HW_SUB_SHIFT(3);                                                                                       \
+        BITWISE_HW_SUB_SHIFT(4);                                                                                       \
+        BITWISE_HW_SUB_SHIFT(5);                                                                                       \
+        BITWISE_HW_SUB_SHIFT(6);                                                                                       \
+        BITWISE_HW_SUB_SHIFT(7);                                                                                       \
+    }                                                                                                                  \
+                                                                                                                       \
+    for (; i < size; ++i) {                                                                                            \
+        hw += bitcount_lookup[(unsigned char)((SELF)->ob_item[i] OP (OTHER)->ob_item[i])];                             \
+    }                                                                                                                  \
 } while(0)
 
 #define BITWISE_FAST_HW_FUNC(OPNAME, OP)                                                                               \
