@@ -66,7 +66,7 @@ int PyIndex_Check(PyObject *o)
 #endif /* HAVE_SYS_TYPES_H */
 #endif /* !STDC_HEADERS */
 
-
+#include <stdalign.h>
 typedef long long int idx_t;
 
 /* throughout:  0 = little endian   1 = big endian */
@@ -428,18 +428,71 @@ static int bitcount_lookup[256] = {
     4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8,
 };
 
+#define a(n) n+0, n+1, n+1, n+2          // 2 bits
+#define b(n) a(n+0),a(n+1),a(n+1),a(n+2) // 4 bits
+#define c(n) b(n+0),b(n+1),b(n+1),b(n+2) // 6 bits
+#define d(n) c(n+0),c(n+1),c(n+1),c(n+2) // 8 bits
+#define e(n) d(n+0),d(n+1),d(n+1),d(n+2) //10 bits
+#define f(n) e(n+0),e(n+1),e(n+1),e(n+2) //12 bits
+#define g(n) f(n+0),f(n+1),f(n+1),f(n+2) //14 bits
+#define h(n) g(n+0),g(n+1),g(n+1),g(n+2) //16 bits
+
+static const alignas(64) unsigned char bitcount_lookup16[0x10000]  = { h(0) };
+
+#undef h
+#undef g
+#undef f
+#undef e
+#undef d
+#undef c
+#undef b
+#undef a
+
+//types and constants used in the functions below
+//uint64_t is an unsigned 64-bit integer variable type (defined in C99 version of C language)
+static const uint64_t bit_m1  = 0x5555555555555555; //binary: 0101...
+static const uint64_t bit_m2  = 0x3333333333333333; //binary: 00110011..
+static const uint64_t bit_m4  = 0x0f0f0f0f0f0f0f0f; //binary:  4 zeros,  4 ones ...
+//static const uint64_t bit_m8  = 0x00ff00ff00ff00ff; //binary:  8 zeros,  8 ones ...
+//static const uint64_t bit_m16 = 0x0000ffff0000ffff; //binary: 16 zeros, 16 ones ...
+//static const uint64_t bit_m32 = 0x00000000ffffffff; //binary: 32 zeros, 32 ones
+//static const uint64_t bit_hff = 0xffffffffffffffff; //binary: all ones
+static const uint64_t bit_h01 = 0x0101010101010101; //the sum of 256 to the power of 0,1,2,3...
+
+//This uses fewer arithmetic operations than any other known
+//implementation on machines with fast multiplication.
+//This algorithm uses 12 arithmetic operations, one of which is a multiply.
+// http://bisqwit.iki.fi/source/misc/bitcounting/#Wp3NiftyRevised
+// https://en.wikipedia.org/wiki/Hamming_weight
+static int
+popcount64c(uint64_t x)
+{
+    x -= (x >> 1) & bit_m1;             //put count of each 2 bits into those 2 bits
+    x = (x & bit_m2) + ((x >> 2) & bit_m2); //put count of each 4 bits into those 4 bits
+    x = (x + (x >> 4)) & bit_m4;        //put count of each 8 bits into those 8 bits
+    return (x * bit_h01) >> 56;  //returns left 8 bits of x + (x<<8) + (x<<16) + (x<<24) + ...
+}
+
 /* returns number of 1 bits */
 static idx_t
 count(bitarrayobject *self)
 {
-    Py_ssize_t i;
+    const Py_ssize_t size = Py_SIZE(self);
+    const uint16_t * data = (const uint16_t *) self->ob_item;
+
+    Py_ssize_t i = 0, ii = 0;
     idx_t res = 0;
-    unsigned char c;
 
     setunused(self);
-    for (i = 0; i < Py_SIZE(self); i++) {
-        c = self->ob_item[i];
-        res += bitcount_lookup[c];
+
+    // Faster 16 lookup
+    for (; i + 2 < size; i+=2, ++ii) {
+        res += bitcount_lookup16[data[ii]];
+    }
+
+    // The rest
+    for (; i < size; ++i) {
+        res += bitcount_lookup[(unsigned char)self->ob_item[i]];
     }
     return res;
 }
@@ -1799,8 +1852,24 @@ PyDoc_STRVAR(fast_copy_doc,
 \n\
 Copies the contents of the parameter with memcpy. Has to have same endianness, size, ...");
 
-#define BITWISE_HW_TYPE unsigned long long
-#define BITWISE_HW_SUB_SHIFT(x) hw += bitcount_lookup[(unsigned char)((( tmp ) >> ((x)*8)) & 0xff)]
+#define BITWISE_HW_TYPE uint64_t
+#define BITWISE_HW_SUB_SHIFT8(x)  hw += bitcount_lookup[  (unsigned char)((( tmp ) >> ((x)*8))  & 0xff)]
+#define BITWISE_HW_SUB_SHIFT16(x) hw += bitcount_lookup16[(uint16_t)     ((( tmp ) >> ((x)*16)) & 0xffff)]
+
+#define BITWISE_HW_WP3(tmpx) do {                    \
+ tmpx -= (tmpx >> 1) & bit_m1;                       \
+ tmpx = (tmpx & bit_m2) + ((tmpx >> 2) & bit_m2);    \
+ tmpx = (tmpx + (tmpx >> 4)) & bit_m4;               \
+ hw += (tmpx * bit_h01) >> 56;                       \
+ } while(0)
+
+#define BITWISE_HW_LP16(tmp) do {                    \
+    BITWISE_HW_SUB_SHIFT16(0);                       \
+    BITWISE_HW_SUB_SHIFT16(1);                       \
+    BITWISE_HW_SUB_SHIFT16(2);                       \
+    BITWISE_HW_SUB_SHIFT16(3);                       \
+} while(0)
+
 #define BITWISE_HW_INTERNAL(SELF, OTHER, OP) do {                                                                      \
     Py_ssize_t i = 0, ii = 0;                                                                                          \
     const Py_ssize_t size = Py_SIZE(SELF);                                                                             \
@@ -1810,14 +1879,7 @@ Copies the contents of the parameter with memcpy. Has to have same endianness, s
                                                                                                                        \
     for (ii=0; i + sizeof(BITWISE_HW_TYPE) < size; i += sizeof(BITWISE_HW_TYPE), ++ii) {                               \
         tmp = self_ob_item[ii] OP other_ob_item[ii];                                                                   \
-        BITWISE_HW_SUB_SHIFT(0);                                                                                       \
-        BITWISE_HW_SUB_SHIFT(1);                                                                                       \
-        BITWISE_HW_SUB_SHIFT(2);                                                                                       \
-        BITWISE_HW_SUB_SHIFT(3);                                                                                       \
-        BITWISE_HW_SUB_SHIFT(4);                                                                                       \
-        BITWISE_HW_SUB_SHIFT(5);                                                                                       \
-        BITWISE_HW_SUB_SHIFT(6);                                                                                       \
-        BITWISE_HW_SUB_SHIFT(7);                                                                                       \
+        BITWISE_HW_WP3(tmp);                                                                                           \
     }                                                                                                                  \
                                                                                                                        \
     for (; i < size; ++i) {                                                                                            \
