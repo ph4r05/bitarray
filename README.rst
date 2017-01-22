@@ -54,17 +54,17 @@ Improvements in this fork
 
 * Bitcount function optimised ``count()``. Hamming weight is computed using WP3 algorithm on 64bit words.
 
-* new method: ``ba.fast_copy(other)``. If the dest bitarray has same bitlength the fast copy is used - ``memmove``.
+* New method: ``ba.fast_copy(other)``. If the dest bitarray has same bitlength the fast copy is used - ``memmove``.
 
-* new method: ``ba.eval_monic(data, index, blocksize)``. Evaluates a monic term on the input data with x_index and the given
+* New method: ``ba.eval_monic(data, index, blocksize)``. Evaluates a monic term on the input data with x_index and the given
   blocksize. Equivalent to ``data[index::blocksize]``. The evaluation is performed in-place with minimal memory reallocations.
   The result is a bitarray of evaluations of the term.
 
-* new method: ``ba.fast_hw_and(other)``. Performs ``return count(ba & other)`` in memory without reallocations
+* New method: ``ba.fast_hw_and(other)``. Performs ``return count(ba & other)`` in memory without reallocations
 
-* new method: ``ba.fast_hw_or(other)``. Performs ``return count(ba | other)`` in memory without reallocations
+* New method: ``ba.fast_hw_or(other)``. Performs ``return count(ba | other)`` in memory without reallocations
 
-* new method: ``ba.fast_hw_xor(other)``. Performs ``return count(ba ^ other)`` in memory without reallocations
+* New method: ``ba.fast_hw_xor(other)``. Performs ``return count(ba ^ other)`` in memory without reallocations
 
 Installation
 ------------
