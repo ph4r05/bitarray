@@ -48,6 +48,11 @@ Key features
 Installation
 ------------
 
+Installation from pip::
+
+    $ pip install bitarray_ph4
+
+
 bitarray can be installed from source::
 
    $ tar xzf bitarray-0.8.2.tar.gz
