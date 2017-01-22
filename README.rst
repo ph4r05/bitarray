@@ -20,7 +20,7 @@ Key features
 * All functionality implemented in C.
 
 * Bitarray objects behave very much like a list object, in particular
-   slicing (including slice assignment and deletion) is supported.
+  slicing (including slice assignment and deletion) is supported.
 
 * The bit endianness can be specified for each bitarray object, see below.
 
