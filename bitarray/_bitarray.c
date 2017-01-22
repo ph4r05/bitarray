@@ -1822,8 +1822,8 @@ PyDoc_STRVAR(eval_monic_doc,
 "eval_monic(data, index, blocksize)\n\
 \n\
 Evaluates a monic term on the input data with x_index and the given\n\
-blocksize. The evaluation is performed in-place with minimal memory reallocations. \n\
-The result is a bitarray of evaluations of the term.");
+blocksize. Equivalent to data[index::blocksize]. The evaluation is performed in-place with minimal \n\
+memory reallocations. The result is a bitarray of evaluations of the term.");
 
 static PyObject *
 bitarray_fast_copy(bitarrayobject *self, PyObject *obj)
