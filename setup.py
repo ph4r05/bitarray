@@ -18,7 +18,7 @@ setup(
     author_email = "ilanschnell@gmail.com",
     maintainer = "Dusan Klinec (ph4r05)",
     maintainer_email = "dusan.klinec@gmail.com",
-    url = "https://github.com/ilanschnell/bitarray",
+    url = "https://github.com/ph4r05/bitarray",
     license = "PSF",
     classifiers = [
         "License :: OSI Approved :: Python Software Foundation License",
