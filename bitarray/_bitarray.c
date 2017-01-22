@@ -473,12 +473,21 @@ popcount64c(uint64_t x)
     return (x * bit_h01) >> 56;  //returns left 8 bits of x + (x<<8) + (x<<16) + (x<<24) + ...
 }
 
+#define BITWISE_HW_WP3(tmpx, hw) do {                    \
+ tmpx -= (tmpx >> 1) & bit_m1;                       \
+ tmpx = (tmpx & bit_m2) + ((tmpx >> 2) & bit_m2);    \
+ tmpx = (tmpx + (tmpx >> 4)) & bit_m4;               \
+ hw += (tmpx * bit_h01) >> 56;                       \
+ } while(0)
+
 /* returns number of 1 bits */
 static idx_t
 count(bitarrayobject *self)
 {
     const Py_ssize_t size = Py_SIZE(self);
-    const uint16_t * data = (const uint16_t *) self->ob_item;
+    //const uint16_t * data = (const uint16_t *) self->ob_item;
+    const uint64_t * data = (const uint64_t *) self->ob_item;
+    uint64_t tmp = 0;
 
     Py_ssize_t i = 0, ii = 0;
     idx_t res = 0;
@@ -486,8 +495,10 @@ count(bitarrayobject *self)
     setunused(self);
 
     // Faster 16 lookup
-    for (; i + 2 < size; i+=2, ++ii) {
-        res += bitcount_lookup16[data[ii]];
+    for (; i + 8 < size; i+=8, ++ii) {
+        tmp = data[ii];
+        BITWISE_HW_WP3(tmp, res);
+        //hw += bitcount_lookup16[data[ii]];
     }
 
     // The rest
@@ -1855,14 +1866,6 @@ Copies the contents of the parameter with memcpy. Has to have same endianness, s
 #define BITWISE_HW_TYPE uint64_t
 #define BITWISE_HW_SUB_SHIFT8(x)  hw += bitcount_lookup[  (unsigned char)((( tmp ) >> ((x)*8))  & 0xff)]
 #define BITWISE_HW_SUB_SHIFT16(x) hw += bitcount_lookup16[(uint16_t)     ((( tmp ) >> ((x)*16)) & 0xffff)]
-
-#define BITWISE_HW_WP3(tmpx) do {                    \
- tmpx -= (tmpx >> 1) & bit_m1;                       \
- tmpx = (tmpx & bit_m2) + ((tmpx >> 2) & bit_m2);    \
- tmpx = (tmpx + (tmpx >> 4)) & bit_m4;               \
- hw += (tmpx * bit_h01) >> 56;                       \
- } while(0)
-
 #define BITWISE_HW_LP16(tmp) do {                    \
     BITWISE_HW_SUB_SHIFT16(0);                       \
     BITWISE_HW_SUB_SHIFT16(1);                       \
@@ -1879,7 +1882,7 @@ Copies the contents of the parameter with memcpy. Has to have same endianness, s
                                                                                                                        \
     for (ii=0; i + sizeof(BITWISE_HW_TYPE) < size; i += sizeof(BITWISE_HW_TYPE), ++ii) {                               \
         tmp = self_ob_item[ii] OP other_ob_item[ii];                                                                   \
-        BITWISE_HW_WP3(tmp);                                                                                           \
+        BITWISE_HW_WP3(tmp, hw);                                                                                           \
     }                                                                                                                  \
                                                                                                                        \
     for (; i < size; ++i) {                                                                                            \
