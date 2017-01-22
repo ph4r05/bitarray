@@ -1882,7 +1882,7 @@ Copies the contents of the parameter with memcpy. Has to have same endianness, s
                                                                                                                        \
     for (ii=0; i + sizeof(BITWISE_HW_TYPE) < size; i += sizeof(BITWISE_HW_TYPE), ++ii) {                               \
         tmp = self_ob_item[ii] OP other_ob_item[ii];                                                                   \
-        BITWISE_HW_WP3(tmp, hw);                                                                                           \
+        BITWISE_HW_WP3(tmp, hw);                                                                                       \
     }                                                                                                                  \
                                                                                                                        \
     for (; i < size; ++i) {                                                                                            \
