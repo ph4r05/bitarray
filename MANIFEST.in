@@ -1,0 +1,8 @@
+include README.rst
+include LICENSE
+include Makefile
+include AUTHORS
+include CHANGE_LOG
+include TODO
+
+
