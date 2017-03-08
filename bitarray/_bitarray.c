@@ -98,6 +98,14 @@ static PyTypeObject Bitarraytype;
 //#define BITMASK(endian, i)  (((BUF_TYPE) 1) << ((endian) ? (BUF_TYPE_SIZE-1 - (i)%BUF_TYPE_SIZE) : (i)%BUF_TYPE_SIZE))
 #define BITMASK(endian, i)  (((unsigned char) 1) << ((endian) ? (7 - (i)%8) : (i)%8))
 
+/* -------------------------------------------- term generator -------------------------------------------- */
+#define MAX_DEG 64
+typedef struct {
+    int deg;
+    int maxterm;
+    int cur[MAX_DEG];
+} termgen_t;
+
 /* ------------ low level access to bits in bitarrayobject ------------- */
 
 #define GETBIT(self, i)  \
@@ -115,6 +123,42 @@ static PyTypeObject Bitarraytype;
     memcpy(A, &__r, sizeof(vec)); \
 } while(0);
 #endif
+
+/**
+ * Initializes term generator to a first combination
+ */
+static void init_termgen(termgen_t * t, int deg, int maxterm){
+    t->deg = deg;
+    t->maxterm = maxterm;
+    memset(t->cur, 0, sizeof(int)*MAX_DEG);
+    for(int i=0; i<deg; i++){
+        t->cur[i] = i;
+    }
+}
+
+/**
+ * Moves termgen to a next combination
+ */
+static int next_termgen(termgen_t * t){
+    int idx = t->deg - 1;
+
+    if (t->cur[idx] == t->maxterm - 1) {
+        do {
+            idx -= 1;
+        } while (idx >= 0 && t->cur[idx] + 1 == t->cur[idx + 1]);
+
+        if (idx < 0) {
+            return 0;
+        }
+
+        for (int j = idx + 1; j < t->deg; ++j) {
+            t->cur[j] = t->cur[idx] + j - idx + 1;
+        }
+    }
+
+    t->cur[idx]++;
+    return 1;
+}
 
 static void
 setbit(bitarrayobject *self, idx_t i, int bit)
@@ -437,7 +481,7 @@ static int bitcount_lookup[256] = {
 #define g(n) f(n+0),f(n+1),f(n+1),f(n+2) //14 bits
 #define h(n) g(n+0),g(n+1),g(n+1),g(n+2) //16 bits
 
-static const alignas(64) unsigned char bitcount_lookup16[0x10000]  = { h(0) };
+//static const alignas(64) unsigned char bitcount_lookup16[0x10000]  = { h(0) };
 
 #undef h
 #undef g
@@ -1750,6 +1794,7 @@ This method, as well as the unpack method, are meant for efficient\n\
 transfer of data between bitarray objects to other python objects\n\
 (for example NumPy's ndarray object) which have a different view of memory.");
 
+/* -------------------------------------------- term functions -------------------------------------------- */
 
 static PyObject *
 bitarray_eval_monic(bitarrayobject *self, PyObject *args, PyObject *kwds)
@@ -1940,6 +1985,8 @@ PyDoc_STRVAR(bitwise_fast_hw_xor_doc,
              "fast_hw_xor(other_bitarray)\n\
 \n\
 Performs quick in-memory XOR operation on these self and other_bitarray and returns a hamming weight.");
+
+/* -------------------------------------------- bitarray repr -------------------------------------------- */
 
 static PyObject *
 bitarray_repr(bitarrayobject *self)
@@ -2404,6 +2451,333 @@ bitarray_i ## oper (bitarrayobject *self, PyObject *other)   \
 BITARRAY_IFUNC(and)
 BITARRAY_IFUNC(or)
 BITARRAY_IFUNC(xor)
+
+/* -------------------------------------------- best terms -------------------------------------------- */
+
+// Heap element
+typedef struct {
+    int64_t hwdiff;
+    int64_t hw;
+    uint64_t idx;
+} topterm_heap_elem_t;
+
+static int topterm_compare(const void *e1, const void *e2, const void *udata __attribute__((__unused__)))
+{
+    const topterm_heap_elem_t *i1 = e1;
+    const topterm_heap_elem_t *i2 = e2;
+    if (i2->hwdiff == i1->hwdiff){
+        return 0;
+    }
+    return i1->hwdiff < i2->hwdiff ? 1 : -1;
+}
+
+// heap implementation: https://github.com/ph4r05/heap
+typedef struct heap_s{
+    unsigned int size;  /* size of array */
+    unsigned int count; /* items within heap */
+    const void *udata;  /* user data */
+    int (*cmp) (const void *, const void *, const void *);
+    void * array[];
+} heap_t;
+
+size_t heap_sizeof(unsigned int size)
+{
+    return sizeof(heap_t) + size * sizeof(void *);
+}
+
+#define HP_CHILD_LEFT(idx) ((idx) * 2 + 1)
+#define HP_CHILD_RIGHT(idx) ((idx) * 2 + 2)
+#define HP_PARENT(idx) (((idx) - 1) / 2)
+
+void heap_init(heap_t* h, int (*cmp) (const void *,const void *, const void *udata), const void *udata, unsigned int size)
+{
+    h->cmp = cmp;
+    h->udata = udata;
+    h->size = size;
+    h->count = 0;
+}
+
+heap_t *heap_new(int (*cmp) (const void *, const void *, const void *udata), const void *udata, unsigned int size)
+{
+    heap_t *h = PyMem_Malloc(heap_sizeof(size));
+
+    if (!h)
+        return NULL;
+
+    heap_init(h, cmp, udata, size);
+
+    return h;
+}
+
+void heap_free(heap_t * h)
+{
+    PyMem_Free(h);
+}
+
+int heap_count(const heap_t * h)
+{
+    return h->count;
+}
+
+/**
+ * @return a new heap on success; NULL otherwise */
+static heap_t* __ensurecapacity(heap_t * h)
+{
+    if (h->count < h->size)
+        return h;
+
+    h->size *= 2;
+
+    return PyMem_Realloc(h, heap_sizeof(h->size));
+}
+
+static void __swap(heap_t * h, const int i1, const int i2)
+{
+    void *tmp = h->array[i1];
+    h->array[i1] = h->array[i2];
+    h->array[i2] = tmp;
+}
+
+static int __pushup(heap_t * h, unsigned int idx)
+{
+    /* 0 is the root node */
+    while (0 != idx)
+    {
+        int parent = HP_PARENT(idx);
+
+        /* we are smaller than the parent */
+        if (h->cmp(h->array[idx], h->array[parent], h->udata) < 0)
+            return -1;
+        else
+            __swap(h, idx, parent);
+
+        idx = parent;
+    }
+
+    return idx;
+}
+
+static void __pushdown(heap_t * h, unsigned int idx)
+{
+    while (1)
+    {
+        unsigned int childl, childr, child;
+
+        childl = HP_CHILD_LEFT(idx);
+        childr = HP_CHILD_RIGHT(idx);
+
+        if (childr >= h->count)
+        {
+            /* can't pushdown any further */
+            if (childl >= h->count)
+                return;
+
+            child = childl;
+        }
+            /* find biggest child */
+        else if (h->cmp(h->array[childl], h->array[childr], h->udata) < 0)
+            child = childr;
+        else
+            child = childl;
+
+        /* idx is smaller than child */
+        if (h->cmp(h->array[idx], h->array[child], h->udata) < 0)
+        {
+            __swap(h, idx, child);
+            idx = child;
+            /* bigger than the biggest child, we stop, we win */
+        }
+        else
+            return;
+    }
+}
+
+static void __heap_offerx(heap_t * h, void *item)
+{
+    h->array[h->count] = item;
+    __pushup(h, h->count++);
+}
+
+int heap_offerx(heap_t * h, void *item)
+{
+    if (h->count == h->size)
+        return -1;
+    __heap_offerx(h, item);
+    return 0;
+}
+
+int heap_offer(heap_t ** h, void *item)
+{
+    if (NULL == (*h = __ensurecapacity(*h)))
+        return -1;
+
+    __heap_offerx(*h, item);
+    return 0;
+}
+
+#define OP_AND 1
+#define OP_XOR 2
+
+// eval_top_k. We need a simple heap - heap allocated top 128 elements
+static PyObject *
+eval_all_terms(PyObject *self, PyObject *args, PyObject *kwds)
+{
+    static char* kwlist[] = {"base", "deg", "topk", "hw_center", NULL};
+    PyObject *base_arr;
+    idx_t deg=2, maxterm=0, topk=128, hw_center=0;
+    long k = 0;
+    int op_code = OP_AND;
+    topterm_heap_elem_t * heap_data = NULL;
+
+    //PySys_WriteStdout("Here! %p ");
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|LLL:eval_all_terms", kwlist, &base_arr, &deg, &topk, &hw_center)) {
+        return NULL;
+    }
+
+    if (!PyList_Check(base_arr)) {
+        PyErr_SetString(PyExc_TypeError, "base is expected as a list of bit arrays");
+        return NULL;
+    }
+
+    maxterm = PyList_Size(base_arr);
+    if (deg > maxterm){
+        PyErr_SetString(PyExc_IndexError, "degree is larger than size of the base");
+        return NULL;
+    }
+    if (deg < 2){
+        PyErr_SetString(PyExc_IndexError, "Minimal degree is 2. For 1 use directly hw()");
+        return NULL;
+    }
+
+    // Base checking. Allocate memory for the base of maxterms.
+    bitarrayobject ** base = PyMem_Malloc((size_t) (sizeof(PyObject *) * maxterm));
+    if (base == NULL) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    for (k = 0; k < maxterm; k++) {
+        PyObject * tmp_obj = PyList_GetItem(base_arr, (Py_ssize_t) k);
+        if (!bitarray_Check(tmp_obj)) {
+            PyErr_SetString(PyExc_TypeError, "bitarray expected in the base array");
+            goto error;
+        }
+
+        base[k] = (bitarrayobject *) tmp_obj;
+    }
+
+    // Allocate memory for the heap objects, actual storage of the heap structs. Heap contains only pointers.
+    heap_data = PyMem_Malloc((size_t) (sizeof(topterm_heap_elem_t) * topk));
+    if (heap_data == NULL){
+        PyErr_NoMemory();
+        goto error;
+    }
+
+    // Prepare state & working variables
+    //const Py_ssize_t size = Py_SIZE(base[0]);
+    idx_t hw = 0, comb_idx=-1;
+
+    // Sub result for deg-1
+    int last_cached_tmpsub = -1;
+    bitarrayobject *tmpsub = (bitarrayobject *) newbitarrayobject(Py_TYPE(base[0]), base[0]->nbits, base[0]->endian);
+    if (tmpsub == NULL) {
+        goto error;
+    }
+
+    // Create the heap
+    heap_t *hp = heap_new(topterm_compare, NULL, (unsigned int) topk);
+
+    // Generate all polynomials
+    termgen_t termgen;
+    init_termgen(&termgen, (int)deg, (int)maxterm);
+    do {
+        hw = 0;
+        comb_idx += 1;
+        const int idx_first = termgen.cur[0];
+        const int idx_plast = termgen.cur[deg-2];
+        const int idx_last = termgen.cur[deg-1];
+
+        // Precompute tmpsub up to deg-2.
+        // Copy the first basis vector. Then AND or XOR next basis vector from the term.
+        if (last_cached_tmpsub != idx_plast){
+            memcpy(tmpsub->ob_item, base[idx_first]->ob_item, Py_SIZE(base[idx_first]));
+            for(k=1; k <= deg-2; k++){
+                if (op_code == OP_AND) {
+                    BITWISE_FUNC_INTERNAL(tmpsub, base[termgen.cur[k]], &, &=);
+                } else if (op_code == OP_XOR){
+                    BITWISE_FUNC_INTERNAL(tmpsub, base[termgen.cur[k]], ^, ^=);
+                }
+            }
+
+            last_cached_tmpsub = idx_plast;
+        }
+
+        // Now do just in-memory HW counting.
+        if (op_code == OP_AND) {
+            BITWISE_HW_INTERNAL(tmpsub, base[idx_last], &);
+        } else if (op_code == OP_XOR){
+            BITWISE_HW_INTERNAL(tmpsub, base[idx_last], ^);
+        }
+
+        int64_t hw_diff = hw_center > hw ? (hw_center - hw) : (hw - hw_center);
+
+        // Not interesting element (too low & heap is full already) -> continue.
+        if (comb_idx >= hp->size && hw_diff <= ((topterm_heap_elem_t * )(hp->array[0]))->hwdiff){
+            continue;
+        }
+
+        // Interesting element.
+        if (comb_idx < hp->size){
+            heap_data[comb_idx].hwdiff = hw_diff;
+            heap_data[comb_idx].hw = hw;
+            heap_data[comb_idx].idx = (uint64_t)comb_idx;
+            heap_offerx(hp, &(heap_data[comb_idx]));
+
+        } else {
+            topterm_heap_elem_t * const being_replaced = (topterm_heap_elem_t *) hp->array[0];
+            being_replaced->hwdiff = hw_diff;
+            being_replaced->hw = hw;
+            being_replaced->idx = (uint64_t)comb_idx;
+            __pushdown(hp, 0);
+        }
+
+    } while(next_termgen(&termgen) == 1);
+
+    // Return as an array of tuples. Sorting will be done in the python already.
+    PyObject* ret_list = PyList_New((Py_ssize_t)hp->count);
+    for(k=0; k < hp->count; k++){
+        topterm_heap_elem_t * const cur = (topterm_heap_elem_t *) hp->array[k];
+        PyObject* cur_tuple = PyTuple_Pack(3,
+                                           PyLong_FromLongLong(cur->hwdiff),
+                                           PyLong_FromLongLong(cur->hw),
+                                           PyLong_FromLongLong(cur->idx));
+        PyList_SetItem(ret_list, (Py_ssize_t)k, cur_tuple);
+    }
+
+    heap_free(hp);
+    if (base != NULL) {
+        PyMem_Free((void *) base);
+    }
+    if (heap_data != NULL){
+        PyMem_Free((void *) heap_data);
+    }
+
+    return ret_list;
+
+    error:
+    if (base != NULL) {
+        PyMem_Free((void *) base);
+    }
+    if (heap_data != NULL){
+        PyMem_Free((void *) heap_data);
+    }
+    return NULL;
+}
+
+PyDoc_STRVAR(eval_all_terms_doc,
+             "eval_all_terms(base, deg=2, topk=128, hw_center=0) -> list of (hwdiff, hw, idx)\n\
+\n\
+Evaluates all terms on the given basis");
 
 /******************* variable length encoding and decoding ***************/
 
@@ -3330,6 +3704,7 @@ static PyMethodDef module_functions[] = {
     {"bitdiff",    (PyCFunction) bitdiff,    METH_VARARGS, bitdiff_doc   },
     {"bits2bytes", (PyCFunction) bits2bytes, METH_O,       bits2bytes_doc},
     {"_sysinfo",   (PyCFunction) sysinfo,    METH_NOARGS,  sysinfo_doc   },
+    {"eval_all_terms", (PyCFunction) eval_all_terms, METH_VARARGS | METH_KEYWORDS, eval_all_terms_doc },
     {NULL,         NULL}  /* sentinel */
 };
 
