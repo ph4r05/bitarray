@@ -10,122 +10,77 @@ Author: Ilan Schnell
 """
 from bitarray._bitarray import _bitarray, bitdiff, bits2bytes, _sysinfo, eval_all_terms
 
-__version__ = '0.8.13'
 
-
-def _tree_insert(tree, sym, ba):
-    """
-    Insert symbol which is mapped to bitarray into tree
-    """
-    v = ba[0]
-    if len(ba) > 1:
-        if tree[v] == []:
-            tree[v] = [[], []]
-        _tree_insert(tree[v], sym, ba[1:])
-    else:
-        if tree[v] != []:
-            raise ValueError("prefix code ambiguous")
-        tree[v] = sym
-
-def _mk_tree(codedict):
-    # Generate tree from codedict
-    tree = [[], []]
-    for sym, ba in codedict.items():
-        _tree_insert(tree, sym, ba)
-    return tree
-
-def _check_codedict(codedict):
-    if not isinstance(codedict, dict):
-        raise TypeError("dictionary expected")
-    if len(codedict) == 0:
-        raise ValueError("prefix code empty")
-    for k, v in codedict.items():
-        if not isinstance(v, bitarray):
-            raise TypeError("bitarray expected for dictionary value")
-        if v.length() == 0:
-            raise ValueError("non-empty bitarray expected")
+__version__ = '1.2.0'
 
 
 class bitarray(_bitarray):
-    """bitarray([initial], [endian=string])
+    """bitarray(initial=0, /, endian='big')
 
 Return a new bitarray object whose items are bits initialized from
-the optional initial, and endianness.
-If no object is provided, the bitarray is initialized to have length zero.
+the optional initial object, and endianness.
+If no initial object is provided, an empty bitarray (length zero) is created.
 The initial object may be of the following types:
 
-int, long
-    Create bitarray of length given by the integer.  The initial values
-    in the array are random, because only the memory allocated.
+`int`: Create a bitarray of given integer length.  The initial values are
+arbitrary.  If you want all values to be set, use the .setall() method.
 
-string
-    Create bitarray from a string of '0's and '1's.
+`str`: Create bitarray from a string of `0` and `1`.
 
-list, tuple, iterable
-    Create bitarray from a sequence, each element in the sequence is
-    converted to a bit using truth value value.
+`list`, `tuple`, `iterable`: Create bitarray from a sequence, each
+element in the sequence is converted to a bit using its truth value.
 
-bitarray
-    Create bitarray from another bitarray.  This is done by copying the
-    memory holding the bitarray data, and is hence very fast.
+`bitarray`: Create bitarray from another bitarray.  This is done by
+copying the memory holding the bitarray data, and is hence very fast.
 
-The optional keyword arguments 'endian' specifies the bit endianness of the
+The optional keyword arguments `endian` specifies the bit endianness of the
 created bitarray object.
-Allowed values are 'big' and 'little' (default is 'big').
+Allowed values are the strings `big` and `little` (default is `big`).
 
 Note that setting the bit endianness only has an effect when accessing the
 machine representation of the bitarray, i.e. when using the methods: tofile,
 fromfile, tobytes, frombytes."""
 
     def fromstring(self, string):
-        """fromstring(string)
+        """fromstring(str)
 
 Append from a string, interpreting the string as machine values.
-Deprecated since version 0.4.0, use ``frombytes()`` instead."""
+Deprecated since version 0.4.0, use `.frombytes()` instead."""
         return self.frombytes(string.encode())
 
     def tostring(self):
-        """tostring() -> string
+        """tostring() -> str
 
 Return the string representing (machine values) of the bitarray.
 When the length of the bitarray is not a multiple of 8, the few remaining
 bits (1..7) are set to 0.
-Deprecated since version 0.4.0, use ``tobytes()`` instead."""
+Deprecated since version 0.4.0, use `.tobytes()` instead."""
         return self.tobytes().decode()
 
-    def decode(self, codedict):
-        """decode(code) -> list
 
-Given a prefix code (a dict mapping symbols to bitarrays),
-decode the content of the bitarray and return the list of symbols."""
-        _check_codedict(codedict)
-        return self._decode(_mk_tree(codedict))
+class frozenbitarray(_bitarray):
+    """frozenbitarray(initial=0, /, endian='big')
 
-    def iterdecode(self, codedict):
-        """iterdecode(code) -> iterator
+Return a frozenbitarray object, which is initialized the same way a bitarray
+object is initialized.  A frozenbitarray is immutable and hashable.
+Its contents cannot be altered after is created; however, it can be used as
+a dictionary key.
+"""
+    def __repr__(self):
+        return 'frozen' + _bitarray.__repr__(self)
 
-Given a prefix code (a dict mapping symbols to bitarrays),
-decode the content of the bitarray and iterate over the symbols."""
-        _check_codedict(codedict)
-        return self._iterdecode(_mk_tree(codedict))
+    def __hash__(self):
+        if getattr(self, '_hash', None) is None:
+            self._hash = hash((self.length(), self.tobytes()))
+        return self._hash
 
-    def encode(self, codedict, iterable):
-        """encode(code, iterable)
+    def __delitem__(self, *args, **kwargs):
+        raise TypeError("'frozenbitarray' is immutable")
 
-Given a prefix code (a dict mapping symbols to bitarrays),
-iterates over iterable object with symbols, and extends the bitarray
-with the corresponding bitarray for each symbols."""
-        _check_codedict(codedict)
-        self._encode(codedict, iterable)
-
-    def __int__(self):
-        raise TypeError("int() argument cannot be a bitarray")
-
-    def __long__(self):
-        raise TypeError("long() argument cannot be a bitarray")
-
-    def __float__(self):
-        raise TypeError("float() argument cannot be a bitarray")
+    append = bytereverse = extend = encode = fill = __delitem__
+    frombytes = fromfile = insert = invert = pack = pop = __delitem__
+    remove = reverse = setall = sort = __setitem__ = __delitem__
+    __iand__ = __iadd__ = __imul__ = __ior__ = __ixor__ = __delitem__
 
 
 def test(verbosity=1, repeat=1):
