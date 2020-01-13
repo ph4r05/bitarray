@@ -1720,6 +1720,32 @@ class MethodTests(unittest.TestCase, Util):
             self.assertTrue(a is b)
             self.check_obj(b)
 
+    def test_eval_monic(self):
+        input = '11100011' + '11001100'
+        a = bitarray(input)
+        b = bitarray()
+
+        self.assertEqual(b.eval_monic(a, 2, 16), bitarray('1'))
+        self.assertEqual(b.eval_monic(a, 9, 16), bitarray('1'))
+        self.assertEqual(b.eval_monic(a, 10, 16), bitarray('0'))
+
+        self.assertEqual(b.eval_monic(a, 0, 8), bitarray('11'))
+        self.assertEqual(b.eval_monic(a, 2, 8), bitarray('10'))
+
+        self.assertEqual(b.eval_monic(a*100, 0, 8), bitarray('11'*100))
+        self.assertEqual(b.eval_monic(a*100, 2, 8), bitarray('10'*100))
+        self.assertEqual(b.eval_monic(a*10, 0, 1), a*10)
+
+    def test_fast_hw_ops(self):
+        for a in self.randombitarrays():
+            b = bitarray(len(a), endian=a.endian())
+            b.frombytes(os.urandom(bits2bytes(len(a))))
+            del b[len(a):]
+
+            self.assertEqual((a & b).count(1), a.fast_hw_and(b))
+            self.assertEqual((a | b).count(1), a.fast_hw_or(b))
+            self.assertEqual((a ^ b).count(1), a.fast_hw_xor(b))
+
 
 tests.append(MethodTests)
 
