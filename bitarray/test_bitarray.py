@@ -36,33 +36,36 @@ from bitarray import (bitarray, frozenbitarray,
 tests = []
 
 
-def slicelen(s, length):
-    assert isinstance(s, slice)
-    start, stop, step = s.indices(length)
-    slicelength = (stop - start + (1 if step < 0 else -1)) // step + 1
-    if slicelength < 0:
-        slicelength = 0
-    return slicelength
-
-
 class Util(object):
 
-    def randombitarrays(self, start=1):
+    @staticmethod
+    def randombitarrays(start=1):
         for n in list(range(start, 25)) + [randint(1000, 2000)]:
             a = bitarray(endian=['little', 'big'][randint(0, 1)])
             a.frombytes(os.urandom(bits2bytes(n)))
             del a[n:]
             yield a
 
-    def randomlists(self):
+    @staticmethod
+    def randomlists():
         for n in list(range(25)) + [randint(1000, 2000)]:
             yield [bool(randint(0, 1)) for d in range(n)]
 
-    def rndsliceidx(self, length):
+    @staticmethod
+    def rndsliceidx(length):
         if randint(0, 1):
             return None
         else:
             return randint(-length-5, length+5)
+
+    @staticmethod
+    def slicelen(s, length):
+        assert isinstance(s, slice)
+        start, stop, step = s.indices(length)
+        slicelength = (stop - start + (1 if step < 0 else -1)) // step + 1
+        if slicelength < 0:
+            slicelength = 0
+        return slicelength
 
     def check_obj(self, a):
         self.assertEqual(repr(type(a)), "<class 'bitarray.bitarray'>")
@@ -230,6 +233,13 @@ class CreateObjectTests(unittest.TestCase, Util):
             a = bitarray(foo())
             self.assertEqual(a, bitarray(lst))
             self.check_obj(a)
+
+    def test_iter3(self):
+        a = bitarray(itertools.repeat(False, 10))
+        self.assertEqual(a, bitarray(10 * '0'))
+        # Note that the through value of '0' is True: bool('0') -> True
+        a = bitarray(itertools.repeat('0', 10))
+        self.assertEqual(a, bitarray(10 * '1'))
 
     def test_01(self):
         a = bitarray('0010111')
@@ -469,7 +479,7 @@ class SliceTests(unittest.TestCase, Util):
             for dum in range(10):
                 step = self.rndsliceidx(la) or None
                 s = slice(self.rndsliceidx(la), self.rndsliceidx(la), step)
-                lb = randint(0, 10) if step is None else slicelen(s, la)
+                lb = randint(0, 10) if step is None else self.slicelen(s, la)
                 b = bitarray(lb)
                 c = bitarray(a)
                 c[s] = b
@@ -2378,11 +2388,8 @@ tests.append(TestsFrozenbitarray)
 # ---------------------------------------------------------------------------
 
 def run(verbosity=1, repeat=1):
-    try:
-        import bitarray.test_util as btu
-        tests.extend(btu.tests)
-    except ImportError:
-        print("WARNING: could not import bitarray.test_util")
+    import bitarray.test_util as btu
+    tests.extend(btu.tests)
 
     print('bitarray is installed in: %s' % os.path.dirname(__file__))
     print('bitarray version: %s' % __version__)

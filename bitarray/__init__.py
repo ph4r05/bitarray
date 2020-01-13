@@ -11,7 +11,7 @@ Author: Ilan Schnell
 from bitarray._bitarray import _bitarray, bitdiff, bits2bytes, _sysinfo, eval_all_terms
 
 
-__version__ = '1.2.0'
+__version__ = '1.2.2'
 
 
 class bitarray(_bitarray):

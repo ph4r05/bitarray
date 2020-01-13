@@ -1,13 +1,14 @@
 """
 This library contains useful functionality for working with Huffman trees
 and codes.
+
+Note:
+    There is function for directly creating a Huffman code from a frequency
+    map: bitarray.util.huffman_code()
 """
 from __future__ import print_function
-import sys
 from heapq import heappush, heappop
 from bitarray import bitarray
-
-is_py3k = bool(sys.version_info[0] == 3)
 
 
 class Node(object):
@@ -37,12 +38,12 @@ def huff_tree(freq):
     # repeat the process until only one node remains
     while len(minheap) > 1:
         # take the nodes with smallest frequencies from the queue
-        childR = heappop(minheap)
-        childL = heappop(minheap)
+        child_0 = heappop(minheap)
+        child_1 = heappop(minheap)
         # construct the new internal node and push it onto the queue
         parent = Node()
-        parent.child = [childL, childR]
-        parent.freq = childL.freq + childR.freq
+        parent.child = [child_0, child_1]
+        parent.freq = child_0.freq + child_1.freq
         heappush(minheap, parent)
 
     # return the one remaining node, which is the root of the Huffman tree
@@ -110,28 +111,23 @@ def traverse(tree, it):
         nd = nd.child[next(it)]
         if not nd:
             raise ValueError("prefix code does not match data in bitarray")
-            return None
         if nd.symbol is not None:
             return nd.symbol
     if nd != tree:
         raise ValueError("decoding not terminated")
-        return None
 
 
-def decode(tree, bitsequence):
+def iterdecode(tree, bitsequence):
     """
-    Given a tree and a bitsequence, decode the bitsequence and return a
-    list of symbols.
+    Given a tree and a bitsequence, decode the bitsequence and generate
+    the symbols.
     """
-    res = []
     it = iter(bitsequence)
     while True:
         try:
-            r = traverse(tree, it)
+            yield traverse(tree, it)
         except StopIteration:
             break
-        res.append(r)
-    return res
 
 
 def write_dot(tree, fn, binary=False):
@@ -141,12 +137,11 @@ def write_dot(tree, fn, binary=False):
     """
     special_ascii = {' ': 'SPACE', '\n': 'LF', '\r': 'CR', '\t': 'TAB',
                      '\\': r'\\', '"': r'\"'}
-    def disp_char(c):
-        if is_py3k and isinstance(c, int):
-            c = chr(c)
+    def disp_sym(i):
         if binary:
-            return 'x%02x' % ord(c)
+            return '0x%02x' % i
         else:
+            c = chr(i)
             res = special_ascii.get(c, c)
             assert res.strip(), repr(c)
             return res
@@ -159,7 +154,7 @@ def write_dot(tree, fn, binary=False):
     with open(fn, 'w') as fo:    # dot -Tpng tree.dot -O
         def write_nd(fo, nd):
             if nd.symbol is not None: # leaf node
-                a, b = disp_freq(nd.freq), disp_char(nd.symbol)
+                a, b = disp_freq(nd.freq), disp_sym(nd.symbol)
                 fo.write('  %d  [label="%s%s%s"];\n' %
                          (id(nd), a, ': ' if a and b else '', b))
             else: # parent node
@@ -194,11 +189,9 @@ def print_code(freq, codedict):
 
     print(' symbol     char    hex   frequency     Huffman code')
     print(70 * '-')
-    for c in sorted(codedict, key=lambda c: (freq[c], c), reverse=True):
-        i = c if is_py3k else ord(c)
+    for i in sorted(codedict, key=lambda c: (freq[c], c), reverse=True):
         print('%7r     %-4s    0x%02x %10i     %s' % (
-            c, disp_char(i),
-            i, freq[c], codedict[c].to01()))
+            i, disp_char(i), i, freq[i], codedict[i].to01()))
 
 
 def test():
@@ -216,7 +209,7 @@ def test():
     a = bitarray()
     a.encode(code, txt)
     assert a == bitarray('010110')
-    assert decode(tree, a) == ['a', 'b', 'c', 'a']
+    assert list(iterdecode(tree, a)) == ['a', 'b', 'c', 'a']
 
 
 if __name__ == '__main__':
