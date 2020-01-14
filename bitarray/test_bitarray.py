@@ -39,8 +39,15 @@ tests = []
 class Util(object):
 
     @staticmethod
+    def is_heavy_test():
+        return int(os.getenv('TEST_HEAVY', 0))
+
+    @staticmethod
     def randombitarrays(start=1):
-        for n in list(range(start, 25)) + [randint(1000, 2000)]:
+        nb1 = 250 if Util.is_heavy_test() else 25
+        nb2 = 10 if Util.is_heavy_test() else 1
+        lst = list(range(start, nb1)) + [randint(1000, 2000) for _ in range(nb2)]
+        for n in lst:
             a = bitarray(endian=['little', 'big'][randint(0, 1)])
             a.frombytes(os.urandom(bits2bytes(n)))
             del a[n:]
