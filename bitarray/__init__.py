@@ -9,6 +9,7 @@ Please find a description of this package at:
 Author: Ilan Schnell
 """
 from bitarray._bitarray import _bitarray, bitdiff, bits2bytes, _sysinfo, eval_all_terms
+from bitarray._bitarray import _tbase as tbase
 
 
 __version__ = '1.2.2'
