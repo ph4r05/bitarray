@@ -12,7 +12,7 @@ from bitarray._bitarray import _bitarray, bitdiff, bits2bytes, _sysinfo, eval_al
 from bitarray._bitarray import _tbase as tbase
 
 
-__version__ = '1.2.2'
+__version__ = '1.2.3'
 
 
 class bitarray(_bitarray):
