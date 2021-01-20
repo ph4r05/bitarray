@@ -2,11 +2,11 @@ PYTHON=python
 
 
 bitarray/_bitarray.so: bitarray/_bitarray.c
-	$(PYTHON) setup.py build_ext --inplace
+	env python setup.py build_ext --inplace
 
 
 test: bitarray/_bitarray.so
-	$(PYTHON) -c "import bitarray; bitarray.test()"
+	env python -c "import bitarray; bitarray.test()"
 
 
 install:

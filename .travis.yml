@@ -1,0 +1,36 @@
+sudo: false
+dist: bionic
+language: python
+python:
+  - "2.7"
+  - "3.7"
+  - "3.8"
+  - "3.9"
+
+ache:
+  directories:
+    - $HOME/.cache/pip
+
+env:
+  global:
+    - LC_ALL=en_US.UTF-8
+    - TEST_HEAVY=1
+
+addons:
+  apt:
+    sources:
+    - ubuntu-toolchain-r-test
+    packages:
+    - build-essential
+    - autoconf
+    - cmake
+    - cmake-data
+
+install:
+  - |
+    PYTHONPATH=.:$PYTHONPATH
+    make
+
+script:
+  - |
+    make test

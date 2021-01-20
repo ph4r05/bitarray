@@ -1,0 +1,3 @@
+import bitarray
+bitarray.test()
+

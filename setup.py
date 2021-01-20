@@ -1,6 +1,5 @@
 import re
-from distutils.core import setup, Extension
-
+from setuptools import setup, Extension
 
 kwds = {}
 try:
@@ -15,10 +14,12 @@ kwds['version'] = pat.search(data).group(1)
 
 
 setup(
-    name = "bitarray",
+    name = "bitarray_ph4",
     author = "Ilan Schnell",
     author_email = "ilanschnell@gmail.com",
-    url = "https://github.com/ilanschnell/bitarray",
+    maintainer = "Dusan Klinec (ph4r05)",
+    maintainer_email = "dusan.klinec@gmail.com",
+    url = "https://github.com/ph4r05/bitarray",
     license = "PSF",
     classifiers = [
         "License :: OSI Approved :: Python Software Foundation License",
@@ -39,6 +40,7 @@ setup(
     ],
     description = "efficient arrays of booleans -- C extension",
     packages = ["bitarray"],
+    setup_requires=["wheel"],
     ext_modules = [Extension(name = "bitarray._bitarray",
                              sources = ["bitarray/_bitarray.c"]),
                    Extension(name = "bitarray._util",
