@@ -4,5 +4,8 @@ include Makefile
 include AUTHORS
 include CHANGE_LOG
 include TODO
+include bitarray/*.c
+include bitarray/*.h
+include bitarray/*.py
 
 
