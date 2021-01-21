@@ -1,4 +1,5 @@
 import re
+import os
 from setuptools import setup, Extension
 
 kwds = {}
@@ -11,7 +12,7 @@ except IOError:
 pat = re.compile(r'#define\s+BITARRAY_VERSION\s+"(\S+)"', re.M)
 data = open('bitarray/bitarray.h').read()
 kwds['version'] = pat.search(data).group(1)
-
+compile_args = ['-std=c99']
 
 setup(
     name = "bitarray_ph4",
@@ -40,10 +41,11 @@ setup(
     ],
     description = "efficient arrays of booleans -- C extension",
     packages = ["bitarray"],
-    setup_requires=["wheel"],
-    ext_modules = [Extension(name = "bitarray._bitarray",
-                             sources = ["bitarray/_bitarray.c"]),
-                   Extension(name = "bitarray._util",
-                             sources = ["bitarray/_util.c"])],
+    ext_modules = [Extension(name="bitarray._bitarray",
+                             sources=["bitarray/_bitarray.c"],
+                             extra_compile_args=[x for x in compile_args if x],),
+                   Extension(name="bitarray._util",
+                             sources=["bitarray/_util.c"],
+                             extra_compile_args=[x for x in compile_args if x],)],
     **kwds
 )
